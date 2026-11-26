@@ -122,6 +122,9 @@ var NB={
  setDns:function(p,s){var f=NB.findDns();if(!f)return 'nofield';NB.setv(f[0],p);NB.setv(f[1],s);return 'ok';},
  readDns:function(){var f=NB.findDns();return f?(f[0].value+'|'+f[1].value):'';},
  diag:function(){var r=[];NB.docs().forEach(function(d){var n=d.querySelectorAll('input').length;var b=d.body?(d.body.innerText||'').replace(/\s+/g,' ').slice(0,60):'';r.push(n+' inputs: '+b);});return r.join(' || ');},
+ hook:function(){NB.docs().forEach(function(d){try{var w=d.defaultView;w.alert=function(m){window.top.__nb=(window.top.__nb||'')+'alert:'+m+' ; ';};w.confirm=function(m){window.top.__nb=(window.top.__nb||'')+'confirm:'+m+' ; ';return true;};}catch(e){}});return 'ok';},
+ alerts:function(){return window.top.__nb||'';},
+ saveDns:function(){var f=NB.findDns();if(!f)return 'nofield';var d=f[0].ownerDocument;var c=[].slice.call(d.querySelectorAll('input,button,a')).filter(function(e){return NB.vis(e)&&/^save$/i.test((e.value||e.innerText||'').trim());});if(!c.length)return 'nosave';c[c.length-1].click();return 'clicked';},
  page:function(){var t=NB.docs().map(function(d){return d.body?d.body.innerText:'';}).join('\n');return t.length>30000?t.slice(0,30000):t;}
 };
 """.trimIndent()
@@ -184,38 +187,61 @@ class AutoApply(
     }
 
     private val dhcpSub = listOf("- dhcp settings", "dhcp settings")
+    private val dhcpOther = listOf("- dhcp clients list", "dhcp clients list")
 
-    /**
-     * مبسّط: يفتح DHCP ← DHCP Settings، ثم يملأ آخر خانتين نصيتين في الصفحة (DNS Server و Secondary DNS Server)
-     * بدون الاعتماد على أسماء الحقول، يحفظ، ثم يعيد القراءة للتأكد.
-     */
-    private suspend fun setDnsOnDhcp(): Boolean {
-        suspend fun open() {
-            if (js("NB.findDns()?'yes':'no'") == "yes") return   // نحن بالفعل في الصفحة
-            click(listOf("dhcp"), "left", tries = 6)
-            delay(900)
-            click(dhcpSub, "left", tries = 4)
+    /** يفتح DHCP Settings. force=true: يزور صفحة أخرى أولاً لإجبار الراوتر على إعادة تحميل القيم المحفوظة. */
+    private suspend fun openDhcp(force: Boolean) {
+        if (!force && js("NB.findDns()?'yes':'no'") == "yes") return
+        click(listOf("dhcp"), "left", tries = 6)
+        delay(900)
+        if (force) {
+            click(dhcpOther, "left", tries = 3)
             delay(1500)
         }
-        open()
-        val a = until("NB.setDns('$dnsP','$dnsS')", 12) { it == "ok" }
-        if (a != "ok") {
-            log("⚠ لم أجد حقول DNS في صفحة DHCP (لم يتم تغيير شيء).")
+        click(dhcpSub, "left", tries = 4)
+        delay(1500)
+    }
+
+    /**
+     * يفتح DHCP Settings، يستبدل DNS Server و Secondary DNS Server بأسرع سيرفرين، يتأكد أنهم اتكتبوا في الخانتين،
+     * يضغط Save، ثم ينتظر (حتى ~30 ثانية) ويعيد تحميل الصفحة فعلياً ويقرأ القيم المحفوظة من الراوتر.
+     */
+    private suspend fun setDnsOnDhcp(): Boolean {
+        val want = "$dnsP|$dnsS"
+        openDhcp(false)
+
+        var filled = false
+        for (i in 0 until 3) {
+            val a = until("NB.setDns('$dnsP','$dnsS')", 12) { it == "ok" }
+            if (a != "ok") break
+            if (until("NB.readDns()", 2, 300) { it == want } == want) { filled = true; break }
+            delay(500)
+        }
+        if (!filled) {
+            log("⚠ لم أستطع كتابة DNS في خانتي صفحة DHCP (لم يتم تغيير شيء).")
             log("ℹ " + js("NB.diag()").take(300))
             return false
         }
-        if (!click(listOf("save"), "last", tries = 6)) {
+
+        js("NB.hook()")   // لالتقاط رسائل الراوتر (alert/confirm) والموافقة على أي confirm
+        val clicked = until("NB.saveDns()", 6) { it == "clicked" } == "clicked" ||
+                click(listOf("save"), "last", tries = 3)
+        if (!clicked) {
             log("⚠ لم أجد زر Save في صفحة DHCP، لم يتم تغيير الـ DNS.")
             return false
         }
-        delay(3500)
-        // أعد فتح الصفحة وتأكد من القيم المحفوظة
-        click(listOf("dhcp"), "left", tries = 3)
-        delay(800)
-        click(dhcpSub, "left", tries = 3)
-        delay(1500)
-        val v = until("NB.readDns()", 6) { it.isNotEmpty() }
-        return if (v == "$dnsP|$dnsS") {
+
+        // انتظار الحفظ ثم قراءة القيم من الراوتر بعد إعادة تحميل حقيقية للصفحة
+        var v = ""
+        for (round in 0 until 6) {
+            delay(5000)
+            openDhcp(true)
+            v = until("NB.readDns()", 3, 800) { it.isNotEmpty() }
+            if (v == want) break
+        }
+        val msg = js("NB.alerts()")
+        if (msg.isNotEmpty()) log("ℹ رسالة الراوتر: " + msg.take(200))
+        return if (v == want) {
             log("✔ تم حفظ DNS وتأكيده: $dnsP / $dnsS")
             true
         } else {
