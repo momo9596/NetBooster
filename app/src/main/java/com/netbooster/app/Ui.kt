@@ -12,7 +12,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -28,19 +33,20 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch // تم إضافة هذا الاستيراد المهم
-import kotlin.math.abs
+import kotlinx.coroutines.launch
 
-private val Bg = Color(0xFF0B131E)
-private val CardBg = Color(0xFF162230)
-private val Accent = Color(0xFF00D1B2)
-private val Good = Color(0xFF4ADE80)
-private val Warn = Color(0xFFFBBF24)
-private val Bad = Color(0xFFF87171)
-private val Muted = Color(0xFF93A4B8)
+// ألوان احترافية
+private val BgGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
+private val CardBg = Color(0xFF1E293B)
+private val Accent = Color(0xFF38BDF8) // أزرق سماوي احترافي
+private val Good = Color(0xFF10B981)
+private val Warn = Color(0xFFF59E0B)
+private val Bad = Color(0xFFEF4444)
+private val Muted = Color(0xFF94A3B8)
 
 @Composable
 fun App(vm: MainViewModel) {
@@ -48,16 +54,32 @@ fun App(vm: MainViewModel) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = Accent, onPrimary = Color.Black,
-            background = Bg, surface = Bg, onSurface = Color.White, onBackground = Color.White
+            background = Color(0xFF020617), surface = Color(0xFF0F172A), onSurface = Color.White
         )
     ) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             BackHandler(enabled = s.screen != Screen.SETUP) { vm.back() }
-            Surface(Modifier.fillMaxSize(), color = Bg) {
-                when (s.screen) {
-                    Screen.SETUP -> SetupScreen(vm)
-                    Screen.ANALYSIS -> AnalysisScreen(vm)
-                    Screen.WEB -> WebScreen(vm)
+            Box(modifier = Modifier.fillMaxSize().background(BgGradient)) {
+                Column(Modifier.fillMaxSize()) {
+                    // الهيدر الاحترافي
+                    Surface(
+                        color = Color(0xFF0F172A).copy(alpha = 0.9f),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("NetBooster Pro", fontSize = 24.sp, fontWeight = FontWeight.Black, color = Accent, letterSpacing = 1.sp)
+                            Spacer(Modifier.height(4.dp))
+                            Text("المطور: محمد إبراهيم", fontSize = 14.sp, color = Muted, fontWeight = FontWeight.Medium)
+                        }
+                    }
+
+                    // الشاشات
+                    when (s.screen) {
+                        Screen.SETUP -> SetupScreen(vm)
+                        Screen.ANALYSIS -> AnalysisScreen(vm)
+                        Screen.WEB -> WebScreen(vm)
+                    }
                 }
             }
         }
@@ -68,29 +90,76 @@ fun App(vm: MainViewModel) {
 private fun SetupScreen(vm: MainViewModel) {
     val s = vm.state
     val ctx = LocalContext.current
+    var showManualInput by remember { mutableStateOf(false) }
+    
     fun hasLocation() = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.start(it) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { 
+        if (s.routerIp.isNotEmpty()) vm.start(it)
+    }
+
+    // مؤقت ذكي: إذا مر 8 ثواني ولم يبدأ الفحص، نظهر إدخال يدوي
+    LaunchedEffect(Unit) {
+        delay(8000)
+        if (s.screen == Screen.SETUP) showManualInput = true
+    }
 
     LaunchedEffect(Unit) {
-        if (s.routerIp.isNotEmpty()) {
+        if (s.routerIp.isNotEmpty() && !showManualInput) {
             if (hasLocation()) vm.start(true) else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        } else {
-            vm.detectRouter()
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("NetBooster", fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, color = Accent)
-        Spacer(modifier = Modifier.height(20.dp))
-        CircularProgressIndicator(color = Accent, strokeWidth = 4.dp, modifier = Modifier.size(60.dp))
-        Text("جاري التحقق من الراوتر والبدء...", color = Good, modifier = Modifier.padding(top = 24.dp))
+    Column(
+        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(40.dp))
+        
+        if (!showManualInput) {
+            // شاشة التحميل
+            val infiniteTransition = rememberInfiniteTransition(label = "")
+            val alpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "")
+            
+            CircularProgressIndicator(color = Accent, strokeWidth = 5.dp, modifier = Modifier.size(80.dp))
+            Spacer(Modifier.height(24.dp))
+            Text("جاري التهيئة وفحص الشبكة...", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.alpha(alpha))
+            Text("يرجى الانتظار بينما نقوم بقياس سرعة الشبكة", color = Muted, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top=8.dp))
+        } else {
+            // شاشة الإدخال اليدوي
+            Text("تأخر الاتصال بالراوتر التلقائي", color = Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("يرجى التأكد من اتصالك بالواي فاي أو كتابة IP الراوتر أدناه", color = Muted, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 16.dp))
+            
+            OutlinedTextField(
+                value = s.routerIp,
+                onValueChange = { vm.onIp(it) },
+                label = { Text("Router IP") },
+                placeholder = { Text("192.168.1.1") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent)
+            )
+            if (s.error.isNotEmpty()) {
+                Text(s.error, color = Bad, fontSize = 12.sp, modifier = Modifier.padding(top=8.dp).align(Alignment.Start))
+            }
+            
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = { 
+                    if (hasLocation()) vm.start(true) else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("بدء الفحص الآن", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
 @Composable
 private fun AnalysisScreen(vm: MainViewModel) {
     val s = vm.state
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         
         AnimatedVisibility(visible = s.comparison != null) {
             s.comparison?.let { cmp ->
@@ -98,29 +167,67 @@ private fun AnalysisScreen(vm: MainViewModel) {
                 val isGood = pct >= 0
                 Card(
                     Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = if (isGood) Color(0xFF132D24) else Color(0xFF2D1313)),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(2.dp, if(isGood) Good else Bad)
+                    colors = CardDefaults.cardColors(containerColor = if (isGood) Color(0xFF064E3B) else Color(0xFF7F1D1D)),
+                    shape = RoundedCornerShape(24.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if(isGood) Good else Bad)
                 ) {
                     Column(Modifier.padding(24.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(if (isGood) "تم تحسين الشبكة!" else "لم يحدث تحسن", color = if(isGood) Good else Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text(if (isGood) "+${fmt(pct, 0)}%" else "${fmt(pct, 0)}%", fontSize = 64.sp, fontWeight = FontWeight.Black, color = if(isGood) Good else Bad)
+                        Text(if (isGood) "تم تحسين الشبكة بنجاح!" else "لم يحدث تحسن", color = if(isGood) Good else Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isGood) "+${fmt(pct, 0)}%" else "${fmt(pct, 0)}%", fontSize = 72.sp, fontWeight = FontWeight.Black, color = if(isGood) Good else Bad)
+                        Text("معدل التحسين الكلي", color = Muted, fontSize = 14.sp)
                     }
                 }
             }
         }
 
         if (s.running || s.retesting) {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CardBg)) {
-                Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Accent)
-                    Text(if (s.retesting) "جاري القياس بعد التعديل..." else "جاري الفحص...", color = Accent, modifier = Modifier.padding(top = 16.dp))
+            Card(
+                Modifier.fillMaxWidth(), 
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 4.dp)
+                    Text(if (s.retesting) "جاري إعادة القياس بعد التعديل..." else "جاري الفحص الشامل...", color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
                 }
             }
         }
 
+        // سجل العمليات
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("سجل الفحص", color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                s.steps.forEach { StepRow(it) }
+            }
+        }
+
         if (!s.running && s.comparison == null) {
-            Button(onClick = { vm.retest() }, modifier = Modifier.fillMaxWidth()) { Text("إعادة القياس") }
+            Button(onClick = { vm.retest() }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(12.dp)) { 
+                Text("إعادة القياس", fontSize = 16.sp) 
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepRow(st: Step) {
+    val (icon, color) = when (st.status) {
+        Status.WAITING -> "○" to Muted
+        Status.RUNNING -> "⏳" to Warn
+        Status.DONE -> "✔" to Good
+        Status.FAILED -> "✖" to Bad
+        Status.SKIPPED -> "–" to Muted
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(icon, color = color, fontSize = 16.sp)
+        Column(Modifier.weight(1f)) {
+            Text(st.title, fontWeight = FontWeight.Medium, color = if (st.status == Status.RUNNING) Warn else Color.White, fontSize = 14.sp)
+            if (st.detail.isNotEmpty()) Text(st.detail, color = Muted, fontSize = 12.sp)
         }
     }
 }
@@ -144,7 +251,6 @@ private fun WebScreen(vm: MainViewModel) {
     fun applyNow() {
         val w = web ?: return
         if (busyFlag[0]) return
-        // هنا تم إصلاح الخطأ بوضع الاستدعاء داخل scope.launch
         scope.launch {
             busy = true; busyFlag[0] = true; logs.clear()
             var ok = try {
@@ -162,15 +268,19 @@ private fun WebScreen(vm: MainViewModel) {
     LaunchedEffect(web) {
         if (web != null && vm.state.autoPending && p.isNotEmpty() && sec.isNotEmpty()) {
             vm.consumeAuto()
-            delay(4000)
+            delay(3000)
             applyNow()
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
+    Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("جاري التطبيق التلقائي (${profile.brand})", fontSize = 18.sp, color = Accent)
-            Card(colors = CardDefaults.cardColors(containerColor = Color.Black)) {
+            Text("جاري التطبيق التلقائي (${profile.brand})", fontSize = 16.sp, color = Accent, fontWeight = FontWeight.Bold)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Column(Modifier.padding(12.dp).fillMaxWidth().height(80.dp)) {
                     logs.takeLast(3).forEach { Text(it, fontSize = 12.sp, color = if (it.contains("✔")) Good else Muted) }
                 }
@@ -202,8 +312,13 @@ private fun WebScreen(vm: MainViewModel) {
                 }
             )
             if (busy) {
-                Box(Modifier.fillMaxSize().background(Bg.copy(alpha = 0.9f)), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Accent)
+                Box(Modifier.fillMaxSize().background(Color(0xFF020617).copy(alpha = 0.95f)), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Accent, strokeWidth = 5.dp, modifier = Modifier.size(60.dp))
+                        Spacer(Modifier.height(24.dp))
+                        Text("جاري تعديل إعدادات الراوتر وإعادة التشغيل...", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("لا تقم بإغلاق التطبيق", color = Warn, fontSize = 14.sp, modifier = Modifier.padding(top=8.dp))
+                    }
                 }
             }
         }
