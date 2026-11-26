@@ -14,75 +14,84 @@ private val NB_LIB = """
 var NB={
  docs:function(){var r=[];(function w(x){try{r.push(x.document);for(var i=0;i<x.frames.length;i++)w(x.frames[i]);}catch(e){}})(window);return r;},
  vis:function(e){return !!(e.offsetWidth||e.offsetHeight||(e.getClientRects&&e.getClientRects().length));},
- setv:function(el,v){try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');d.set.call(el,v);}catch(e){el.value=v;}['input','change','blur','keyup'].forEach(function(n){el.dispatchEvent(new Event(n,{bubbles:true}));});},
- // دالة مخصصة لراوترات TP-Link لتعبئة الـ DNS
- setTpLinkDns: function(p, s) {
-    var found = 0;
+ txt:function(e){return (e.innerText||e.value||'').replace(/\s+/g,' ').trim().toLowerCase();},
+ 
+ // البحث عن زر القائمة الجانبية بالـ ID والضغط عليه (خاص بـ TP-Link)
+ clickMenu: function(id) {
+    var c = 0;
     NB.docs().forEach(function(d) {
-        var in1 = d.querySelector('input[name="dnsserver1"], input[name="dns1"], input[id="dnsserver1"]');
-        var in2 = d.querySelector('input[name="dnsserver2"], input[name="dns2"], input[id="dnsserver2"]');
-        // إذا لم نجدها بالاسم، نبحث عنها بجوار كلمة DNS
-        if(!in1) {
-            var ins = d.querySelectorAll('input');
-            for(var i=0; i<ins.length; i++){
-                var prev = ins[i].previousElementSibling;
-                if(prev && prev.innerText && prev.innerText.indexOf('DNS Server') !== -1 && prev.innerText.indexOf('Secondary') === -1) in1 = ins[i];
-                if(prev && prev.innerText && prev.innerText.indexOf('Secondary DNS') !== -1) in2 = ins[i];
-            }
-        }
-        if (in1) { NB.setv(in1, p); found++; }
-        if (in2) { NB.setv(in2, s); found++; }
+        var el = d.getElementById(id);
+        if(el) { el.click(); c++; }
     });
-    return found;
+    return c;
  },
- // دالة مخصصة لتغيير القناة
- setTpLinkChannel: function(n) {
-    var found = 0;
+ 
+ // تعبئة حقول DNS في راوتر TP-Link
+ fillTpLinkDns: function(p, s) {
+    var c = 0;
     NB.docs().forEach(function(d) {
-        var sel = d.querySelector('select[name="channel"], select[id="channel"], select[name="Channel"]');
+        var in1 = d.querySelector('input[name="dnsserver1"], input[id="dnsserver1"], input[name="dns1"]');
+        var in2 = d.querySelector('input[name="dnsserver2"], input[id="dnsserver2"], input[name="dns2"]');
+        if (in1) { NB.setv(in1, p); c++; }
+        if (in2) { NB.setv(in2, s); c++; }
+    });
+    return c;
+ },
+ 
+ // تغيير القناة في راوتر TP-Link
+ setTpLinkChannel: function(n) {
+    var c = 0;
+    NB.docs().forEach(function(d) {
+        var sel = d.querySelector('select[name="channel"], select[id="channel"]');
         if (sel) {
             for(var i=0; i<sel.options.length; i++) {
                 if(sel.options[i].value == String(n) || sel.options[i].text == String(n)) {
                     sel.selectedIndex = i;
                     sel.dispatchEvent(new Event('change', {bubbles:true}));
-                    found++;
+                    c++;
                     break;
                 }
             }
         }
     });
-    return found;
+    return c;
  },
- // دالة ذكية للبحث عن زر الحفظ والضغط عليه
+ 
+ // الضغط على زر الحفظ (Save)
  clickSave: function() {
-    var clicked = 0;
+    var c = 0;
     NB.docs().forEach(function(d) {
-        var btns = d.querySelectorAll('input[type="button"], input[type="submit"], button, a');
+        var btns = d.querySelectorAll('input[type="button"], input[type="submit"], button');
         for(var i=0; i<btns.length; i++) {
             var txt = (btns[i].value || btns[i].innerText || '').toLowerCase().trim();
-            if(txt === 'save' || txt === 'حفظ' || txt === 'apply') {
+            if(txt === 'save' || txt === 'apply' || txt === 'حفظ') {
                 btns[i].click();
-                clicked++;
+                c++;
+                return;
             }
         }
     });
-    return clicked;
+    return c;
  },
+ 
+ // الضغط على زر إعادة التشغيل (Reboot)
  clickReboot: function() {
-    var clicked = 0;
+    var c = 0;
     NB.docs().forEach(function(d) {
-        var btns = d.querySelectorAll('input[type="button"], input[type="submit"], button, a');
+        var btns = d.querySelectorAll('input[type="button"], input[type="submit"], button');
         for(var i=0; i<btns.length; i++) {
             var txt = (btns[i].value || btns[i].innerText || '').toLowerCase().trim();
-            if(txt === 'reboot' || txt === 'إعادة تشغيل' || txt === 'restart') {
+            if(txt === 'reboot' || txt === 'restart' || txt === 'إعادة تشغيل') {
                 btns[i].click();
-                clicked++;
-                return; // نكتفي بضغطة واحدة
+                c++;
+                return;
             }
         }
     });
-    return clicked;
- }
+    return c;
+ },
+
+ setv:function(el,v){try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');d.set.call(el,v);}catch(e){el.value=v;}['input','change','blur','keyup'].forEach(function(n){el.dispatchEvent(new Event(n,{bubbles:true}));});}
 };
 """.trimIndent()
 
@@ -106,16 +115,6 @@ class AutoApply(
         }
     }
 
-    private suspend fun until(expr: String, tries: Int = 15, gap: Long = 1000, ok: (String) -> Boolean): String {
-        var r = ""
-        for (i in 0 until tries) {
-            r = js(expr)
-            if (ok(r)) return r
-            delay(gap)
-        }
-        return r
-    }
-
     private suspend fun tcpOk(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         try {
             Socket().use { it.connect(InetSocketAddress(host, port), 1500); true }
@@ -133,59 +132,67 @@ class AutoApply(
 
     suspend fun execute(): Boolean {
         log("انتظار تحميل صفحة الراوتر...")
-        // التأكد من وجود كلمة Logout لضمان تسجيل الدخول
-        val inn = until("NB.find('logout','left')?'yes':'no'", 20, 1000) { it == "yes" }
-        if (inn != "yes") {
-            log("❌ لم تظهر صفحة الراوتر. تأكد من كلمة المرور.")
+        // التأكد من وجود زر الخروج (Logout) لضمان أننا داخل الصفحة
+        var inn = "0"
+        for (i in 0..20) {
+            inn = js("NB.clickMenu('menu_logout')")
+            if (inn != "0") { // وجدنا زر الخروج، إذن نحن داخل الصفحة
+                break
+            }
+            delay(1000)
+        }
+        
+        if (inn == "0") {
+            log("❌ لم تظهر صفحة الراوتر أو لم يتم تسجيل الدخول.")
             return false
         }
 
         var channelSaved = false
         var dnsSaved = false
 
-        // ---------- 1. تعديل DNS (الانتقال المباشر لصفحة DHCP) ----------
-        log("▶ الدخول المباشر لصفحة DHCP لتعديل DNS...")
-        withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/LanDhcpServerRpm.htm") }
-        delay(3000) // انتظار تحميل الإطارات (Frames)
-        
+        // ---------- 1. تعديل DNS ----------
+        log("▶ الانتقال إلى إعدادات DHCP...")
+        js("NB.clickMenu('menu_dhcpserver')")
+        delay(4000) // انتظار تحميل الصفحة في الإطار الداخلي
+
         log("جاري تعبئة حقول DNS...")
-        val dnsRes = until("NB.setTpLinkDns('$dnsP', '$dnsS')", 10) { it != "0" && it != "err" }
+        val dnsRes = js("NB.fillTpLinkDns('$dnsP', '$dnsS')")
         if (dnsRes != "0" && dnsRes != "err") {
-            log("✔ تم تعبئة الحقول. جاري الضغط على Save...")
+            log("✔ تم تعبئة الحقول. جاري الحفظ...")
             delay(1000)
             val saveRes = js("NB.clickSave()")
             if (saveRes != "0") {
-                delay(2000)
+                delay(3000)
                 dnsSaved = true
                 log("✔ تم حفظ إعدادات الـ DNS بنجاح.")
             } else {
-                log("⚠ لم أتمكن من العثور على زر الحفظ (Save) في صفحة DHCP.")
+                log("⚠ لم أتمكن من العثور على زر الحفظ (Save).")
             }
         } else {
-            log("⚠ لم أتمكن من العثور على حقول DNS في صفحة DHCP.")
+            log("⚠ لم أتمكن من العثور على حقول DNS.")
         }
 
-        // ---------- 2. تعديل القناة (الانتقال المباشر لصفحة الواي فاي) ----------
+        // ---------- 2. تعديل القناة ----------
         if (channel != null) {
-            log("▶ الدخول المباشر لصفحة الواي فاي لتعديل القناة إلى $channel...")
-            withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/WlanBasicRpm.htm") }
-            delay(3000)
+            log("▶ الانتقال إلى إعدادات الواي فاي...")
+            js("NB.clickMenu('menu_wlbasic')")
+            delay(4000)
             
-            log("جاري تحديد القناة...")
-            val chRes = until("NB.setTpLinkChannel($channel)", 10) { it != "0" && it != "err" }
+            log("جاري تحديد القناة $channel...")
+            val chRes = js("NB.setTpLinkChannel($channel)")
             if (chRes != "0" && chRes != "err") {
-                log("✔ تم تحديد القناة. جاري الضغط على Save...")
+                log("✔ تم تحديد القناة. جاري الحفظ...")
                 delay(1000)
                 val saveRes = js("NB.clickSave()")
                 if (saveRes != "0") {
-                    delay(2000)
+                    delay(3000)
                     channelSaved = true
                     log("✔ تم حفظ القناة بنجاح.")
                 } else {
-                    log("⚠ لم أتمكن من العثور على زر الحفظ (Save) في صفحة الواي فاي.")
+                    log("⚠ لم أتمكن من العثور على زر الحفظ (Save).")
                 }
             } else {
-                log("⚠ لم أتمكن من العثور على قائمة القنوات في الصفحة.")
+                log("⚠ لم أتمكن من العثور على قائمة القنوات.")
             }
         }
 
@@ -195,9 +202,9 @@ class AutoApply(
         }
 
         // ---------- 3. إعادة التشغيل ----------
-        log("▶ الدخول لصفحة إعادة التشغيل...")
-        withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/SysRebootRpm.htm") }
-        delay(3000)
+        log("▶ الانتقال لصفحة إعادة التشغيل...")
+        js("NB.clickMenu('menu_restart')")
+        delay(4000)
         
         log("جاري إرسال أمر إعادة التشغيل...")
         val rebootRes = js("NB.clickReboot()")
@@ -211,7 +218,7 @@ class AutoApply(
         // انتظار فصل الراوتر
         delay(5000)
         waitState(routerIp, 80, up = false, timeoutMs = 30_000)
-        log("⏳ بانتظار عودة الراوتر للعمل (قد تستغرق دقيقتين)...")
+        log("⏳ بانتظار عودة الراوتر للعمل (قد تستغرق دقيقة)...")
         
         if (!waitState(routerIp, 80, up = true, timeoutMs = 180_000)) {
             log("⚠ الراوتر لم يعد في الوقت المتوقع. تأكد من اتصالك.")
