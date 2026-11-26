@@ -100,6 +100,28 @@ var NB={
   }
   return '';
  },
+ dhcpInputs:function(){
+  var res=null;
+  NB.docs().forEach(function(d){
+   if(res||!d.body)return;
+   var t=(d.body.innerText||'');
+   if(!/dns/i.test(t))return;
+   var ins=[].slice.call(d.querySelectorAll('input')).filter(function(i){var ty=(i.type||'text').toLowerCase();return (ty==='text'||ty==='tel'||ty==='')&&NB.vis(i)&&!i.disabled;});
+   if(ins.length>=2)res=ins;
+  });
+  return res;
+ },
+ findDns:function(){
+  var ins=NB.dhcpInputs();
+  if(!ins)return null;
+  var named=ins.filter(function(i){return /dns/i.test((i.name||'')+(i.id||''));});
+  var pair=named.length>=2?named.slice(0,2):ins.slice(-2);
+  var ok=pair.every(function(i){return /^[0-9.]*$/.test(i.value||'');});
+  return ok?pair:null;
+ },
+ setDns:function(p,s){var f=NB.findDns();if(!f)return 'nofield';NB.setv(f[0],p);NB.setv(f[1],s);return 'ok';},
+ readDns:function(){var f=NB.findDns();return f?(f[0].value+'|'+f[1].value):'';},
+ diag:function(){var r=[];NB.docs().forEach(function(d){var n=d.querySelectorAll('input').length;var b=d.body?(d.body.innerText||'').replace(/\s+/g,' ').slice(0,60):'';r.push(n+' inputs: '+b);});return r.join(' || ');},
  page:function(){var t=NB.docs().map(function(d){return d.body?d.body.innerText:'';}).join('\n');return t.length>30000?t.slice(0,30000):t;}
 };
 """.trimIndent()
@@ -161,45 +183,40 @@ class AutoApply(
         return false
     }
 
-    // أسماء الحقول في صفحة DHCP Settings لراوترات TP-Link: "DNS Server:" ثم "Secondary DNS Server:"
-    private val priRe = "/^(dns server|primary dns|preferred dns)/i"
-    private val secRe = "/^(secondary dns|alternate dns)/i"
     private val dhcpSub = listOf("- dhcp settings", "dhcp settings")
 
     /**
-     * يضبط DNS من DHCP ← DHCP Settings: يملأ "DNS Server" و "Secondary DNS Server" ثم Save،
-     * ثم يعيد فتح الصفحة ويقرأ القيمة للتأكد. يرجع true فقط لو القيمة اتحفظت فعلاً.
+     * مبسّط: يفتح DHCP ← DHCP Settings، ثم يملأ آخر خانتين نصيتين في الصفحة (DNS Server و Secondary DNS Server)
+     * بدون الاعتماد على أسماء الحقول، يحفظ، ثم يعيد القراءة للتأكد.
      */
     private suspend fun setDnsOnDhcp(): Boolean {
-        suspend fun open(tries: Int): Boolean {
-            if (!click(listOf("dhcp"), "left", tries = tries)) return false
+        suspend fun open() {
+            if (js("NB.findDns()?'yes':'no'") == "yes") return   // نحن بالفعل في الصفحة
+            click(listOf("dhcp"), "left", tries = 6)
             delay(900)
-            click(dhcpSub, "left", tries = tries)
+            click(dhcpSub, "left", tries = 4)
             delay(1500)
-            return true
         }
-        if (!open(6)) {
-            log("⚠ لم أجد قسم DHCP، تم تخطي DNS.")
-            return false
-        }
-        val a = until("NB.fillIp($priRe,'$dnsP')", 10) { it == "ok" }
+        open()
+        val a = until("NB.setDns('$dnsP','$dnsS')", 12) { it == "ok" }
         if (a != "ok") {
-            log("⚠ لم أجد حقل DNS Server في صفحة DHCP Settings (لم يتم تغيير شيء).")
+            log("⚠ لم أجد حقول DNS في صفحة DHCP (لم يتم تغيير شيء).")
+            log("ℹ " + js("NB.diag()").take(300))
             return false
         }
-        val b = until("NB.fillIp($secRe,'$dnsS')", 4) { it == "ok" }
-        if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
         if (!click(listOf("save"), "last", tries = 6)) {
             log("⚠ لم أجد زر Save في صفحة DHCP، لم يتم تغيير الـ DNS.")
             return false
         }
         delay(3500)
-        // إعادة فتح الصفحة وقراءة القيمتين للتأكد
-        open(3)
-        val v = until("NB.readIp($priRe)", 5) { it.isNotEmpty() }
-        val v2 = js("NB.readIp($secRe)")
-        return if (v == dnsP && (b != "ok" || v2 == dnsS)) {
-            log("✔ تم حفظ DNS وتأكيده: $v / $v2")
+        // أعد فتح الصفحة وتأكد من القيم المحفوظة
+        click(listOf("dhcp"), "left", tries = 3)
+        delay(800)
+        click(dhcpSub, "left", tries = 3)
+        delay(1500)
+        val v = until("NB.readDns()", 6) { it.isNotEmpty() }
+        return if (v == "$dnsP|$dnsS") {
+            log("✔ تم حفظ DNS وتأكيده: $dnsP / $dnsS")
             true
         } else {
             log("⚠ لم يتأكد حفظ الـ DNS (قرأت: ${v.ifEmpty { "فارغ" }}).")
