@@ -10,6 +10,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.coroutines.resume
 
+/** مكتبة JavaScript صغيرة تبحث عن العناصر بنصها الظاهر (وليس بأرقام ثابتة) داخل كل الإطارات. */
 private val NB_LIB = """
 var NB={
  docs:function(){var r=[];(function w(x){try{r.push(x.document);for(var i=0;i<x.frames.length;i++)w(x.frames[i]);}catch(e){}})(window);return r;},
@@ -89,10 +90,24 @@ var NB={
   }
   return 'nolabel';
  },
+ readIp:function(re){
+  var ls=NB.labels(re);
+  for(var i=0;i<ls.length;i++){
+   var ins=NB.textIns(ls[i]);
+   if(!ins.length)continue;
+   if(ins[0].maxLength>0&&ins[0].maxLength<=3&&ins.length>=4)return ins.slice(0,4).map(function(x){return x.value;}).join('.');
+   return ins[0].value;
+  }
+  return '';
+ },
  page:function(){var t=NB.docs().map(function(d){return d.body?d.body.innerText:'';}).join('\n');return t.length>30000?t.slice(0,30000):t;}
 };
 """.trimIndent()
 
+/**
+ * يطبق التغييرات داخل صفحة الراوتر عبر WebView بالبحث عن العناصر بنصوصها (Wireless, WAN, Save, Reboot...).
+ * مصمم بحيث يتوقف بأمان لو لم يجد العناصر المتوقعة (لا يضغط حفظ إلا بعد تعبئة الحقول بنجاح).
+ */
 class AutoApply(
     private val web: WebView,
     private val routerIp: String,
@@ -146,6 +161,58 @@ class AutoApply(
         return false
     }
 
+    /** يرجع true لو تم حفظ تغيير واحد على الأقل (وتمت إعادة تشغيل الراوتر وعاد الإنترنت). */
+    private suspend fun setDnsOnDhcp(): Boolean {
+        val nav = click(listOf("dhcp"), "left", tries = 4) && run {
+            delay(900)
+            click(listOf("dhcp settings"), "left", tries = 4)
+        }
+        if (!nav) {
+            log("ℹ لم أجد قسم DHCP")
+            return false
+        }
+        delay(1500)
+        val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 10) { it == "ok" }
+        if (a != "ok") {
+            log("ℹ لم أجد حقول DNS في صفحة DHCP")
+            return false
+        }
+        val b = until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 4) { it == "ok" }
+        if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
+        if (!click(listOf("save"), "last", tries = 6)) {
+            log("⚠ لم أجد زر الحفظ في صفحة DHCP")
+            return false
+        }
+        delay(3500)
+        click(listOf("dhcp settings"), "left", tries = 3)
+        delay(1500)
+        val v = until("NB.readIp(/^(primary|preferred) dns/i)", 6) { it.isNotEmpty() }
+        if (v == dnsP) log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP")
+        else log("⚠ تم الحفظ لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
+        return true
+    }
+
+    private suspend fun setDnsOnWan(): Boolean {
+        val nav = click(listOf("network"), "left") && run {
+            delay(900)
+            click(listOf("wan"), "left")
+        }
+        if (!nav) return false
+        delay(1500)
+        click(listOf("advanced"), "last", tries = 4)
+        delay(1500)
+        js("NB.checkManual()")
+        delay(600)
+        val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 6) { it == "ok" }
+        if (a != "ok") return false
+        until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 3) { it == "ok" }
+        if (!click(listOf("save"), "last", tries = 6)) return false
+        delay(3000)
+        if (click(listOf("save"), "last", tries = 2)) delay(3000)
+        log("✔ تم حفظ DNS في WAN")
+        return true
+    }
+
     suspend fun execute(): Boolean {
         log("التحقق من تسجيل الدخول...")
         val inn = until("NB.find('logout','left')?'yes':'no'", 45, 800) { it == "yes" }
@@ -156,7 +223,9 @@ class AutoApply(
 
         var channelSaved = false
         var dnsSaved = false
+        var dnsOnWan = false
 
+        // ---------- القناة ----------
         if (channel != null) {
             log("ضبط قناة الواي فاي إلى $channel ...")
             val nav = click(listOf("wireless"), "left") && run {
@@ -169,6 +238,8 @@ class AutoApply(
                 delay(1200)
                 val r = until("NB.setChannel($channel)", 12, 700) { it == "set" }
                 if (r == "set") {
+                    // تحسينات الأداء في نفس الصفحة: وضع الواي فاي (b/g/n) وعرض القناة
+                    // 40MHz (أسرع) فقط لو الجو نظيف، وإلا 20MHz لأن 40 يزيد التداخل في الأماكن المزدحمة
                     val m = js("NB.setSel('mode','11bgn')")
                     if (m == "set") log("✔ وضع الواي فاي: 11bgn")
                     val w = js("NB.setSel('channel width', '" + (if (cleanAir) "auto" else "^20") + "')")
@@ -179,6 +250,7 @@ class AutoApply(
                     delay(4000)
                     channelSaved = true
                     log("✔ تم حفظ القناة $channel")
+                    // قوة الإرسال العالية (صفحة Wireless Advanced) - اختيارية، تُتخطى لو غير موجودة
                     if (click(listOf("wireless"), "left", tries = 3)) {
                         delay(900)
                         if (click(listOf("wireless advanced", "advanced"), "left", tries = 3)) {
@@ -196,6 +268,7 @@ class AutoApply(
             }
         }
 
+        // ---------- DNS ----------
         log("ضبط DNS: $dnsP / $dnsS ...")
         val navDns = click(listOf("network"), "left") && run {
             delay(900)
@@ -215,6 +288,7 @@ class AutoApply(
                 if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
                 if (click(listOf("save"), "last", tries = 6)) {
                     delay(3000)
+                    // بعض الموديلات تحتاج حفظ مرة ثانية من صفحة WAN بعد نافذة الإعدادات المتقدمة
                     if (click(listOf("save"), "last", tries = 2)) delay(3000)
                     dnsSaved = true
                     log("✔ تم حفظ DNS")
@@ -231,15 +305,17 @@ class AutoApply(
             return false
         }
 
+        // ---------- التحقق من صفحة Status ----------
         log("التحقق من الإعدادات الجديدة...")
         click(listOf("status"), "left", tries = 6)
         val chRegex = channel?.let { Regex("Channel:\\s*$it\\b") }
         val page = until("NB.page()", 12, 4000) { p ->
-            (!dnsSaved || p.contains(dnsP)) && (!channelSaved || chRegex == null || chRegex.containsMatchIn(p))
+            (!dnsOnWan || p.contains(dnsP)) && (!channelSaved || chRegex == null || chRegex.containsMatchIn(p))
         }
-        if (dnsSaved) log(if (page.contains(dnsP)) "✔ تأكيد DNS: $dnsP" else "⚠ لم أتمكن من تأكيد الـ DNS من صفحة الحالة")
+        if (dnsOnWan) log(if (page.contains(dnsP)) "✔ تأكيد DNS: $dnsP" else "⚠ لم أتمكن من تأكيد الـ DNS من صفحة الحالة")
         if (channelSaved && chRegex != null) log(if (chRegex.containsMatchIn(page)) "✔ تأكيد القناة: $channel" else "⚠ لم أتمكن من تأكيد القناة من صفحة الحالة")
 
+        // ---------- إعادة التشغيل ----------
         log("إعادة تشغيل الراوتر...")
         val navRb = click(listOf("system tools"), "left") && run {
             delay(900)
