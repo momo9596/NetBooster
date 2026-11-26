@@ -15,7 +15,7 @@ private val NB_LIB = """
 var NB={
  docs:function(){var r=[];(function w(x){try{r.push(x.document);for(var i=0;i<x.frames.length;i++)w(x.frames[i]);}catch(e){}})(window);return r;},
  vis:function(e){return !!(e.offsetWidth||e.offsetHeight||(e.getClientRects&&e.getClientRects().length));},
- txt:function(e){return (e.innerText||e.value||'').replace(/\s+/g,' ').trim().toLowerCase();},
+ txt:function(e){return (e.innerText||e.value||'').replace(/\s+/g,' ').trim().replace(/^[-–•]\s*/,'').toLowerCase();},
  absLeft:function(e){var x=e.getBoundingClientRect().left,w=e.ownerDocument.defaultView;try{while(w&&w!==w.top&&w.frameElement){x+=w.frameElement.getBoundingClientRect().left;w=w.parent;}}catch(er){}return x;},
  find:function(text,pick){
   var c=[];
@@ -104,6 +104,10 @@ var NB={
 };
 """.trimIndent()
 
+/** تسميات حقول DNS: "Primary DNS" / "Preferred DNS" / "DNS Server" (TP-Link) والثانوي "Secondary DNS Server". */
+private const val RE_DNS1 = "/^((primary|preferred) )?dns( server)?:?\\s*\$/i"
+private const val RE_DNS2 = "/^(secondary|alternate) dns( server)?:?\\s*\$/i"
+
 /**
  * يطبق التغييرات داخل صفحة الراوتر عبر WebView بالبحث عن العناصر بنصوصها (Wireless, WAN, Save, Reboot...).
  * مصمم بحيث يتوقف بأمان لو لم يجد العناصر المتوقعة (لا يضغط حفظ إلا بعد تعبئة الحقول بنجاح).
@@ -174,12 +178,12 @@ class AutoApply(
         delay(900)
         click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
         delay(1500)
-        val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 10) { it == "ok" }
+        val a = until("NB.fillIp($RE_DNS1,'$dnsP')", 10) { it == "ok" }
         if (a != "ok") {
             log("ℹ لم أجد حقول DNS في صفحة DHCP")
             return false
         }
-        val b = until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 4) { it == "ok" }
+        val b = until("NB.fillIp($RE_DNS2,'$dnsS')", 4) { it == "ok" }
         if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
         if (!click(listOf("save"), "last", tries = 6)) {
             log("⚠ لم أجد زر الحفظ في صفحة DHCP")
@@ -189,7 +193,7 @@ class AutoApply(
         // إعادة فتح الصفحة وقراءة القيمة للتأكد أنها اتحفظت
         click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
         delay(1500)
-        val v = until("NB.readIp(/^(primary|preferred) dns/i)", 6) { it.isNotEmpty() }
+        val v = until("NB.readIp($RE_DNS1)", 6) { it.isNotEmpty() }
         if (v == dnsP) log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP")
         else log("⚠ تم الحفظ لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
         return true
@@ -206,9 +210,9 @@ class AutoApply(
         delay(1500)
         js("NB.checkManual()")
         delay(600)
-        val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 6) { it == "ok" }
+        val a = until("NB.fillIp($RE_DNS1,'$dnsP')", 6) { it == "ok" }
         if (a != "ok") return false
-        until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 3) { it == "ok" }
+        until("NB.fillIp($RE_DNS2,'$dnsS')", 3) { it == "ok" }
         if (!click(listOf("save"), "last", tries = 6)) return false
         delay(3000)
         if (click(listOf("save"), "last", tries = 2)) delay(3000)
