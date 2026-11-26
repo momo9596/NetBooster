@@ -15,7 +15,7 @@ private val NB_LIB = """
 var NB={
  docs:function(){var r=[];(function w(x){try{r.push(x.document);for(var i=0;i<x.frames.length;i++)w(x.frames[i]);}catch(e){}})(window);return r;},
  vis:function(e){return !!(e.offsetWidth||e.offsetHeight||(e.getClientRects&&e.getClientRects().length));},
- txt:function(e){return (e.innerText||e.value||'').replace(/\s+/g,' ').trim().replace(/^[-–•]\s*/,'').toLowerCase();},
+ txt:function(e){return (e.innerText||e.value||'').replace(/\s+/g,' ').trim().toLowerCase();},
  absLeft:function(e){var x=e.getBoundingClientRect().left,w=e.ownerDocument.defaultView;try{while(w&&w!==w.top&&w.frameElement){x+=w.frameElement.getBoundingClientRect().left;w=w.parent;}}catch(er){}return x;},
  find:function(text,pick){
   var c=[];
@@ -104,10 +104,6 @@ var NB={
 };
 """.trimIndent()
 
-/** تسميات حقول DNS: "Primary DNS" / "Preferred DNS" / "DNS Server" (TP-Link) والثانوي "Secondary DNS Server". */
-private const val RE_DNS1 = "/^((primary|preferred) )?dns( server)?:?\\s*\$/i"
-private const val RE_DNS2 = "/^(secondary|alternate) dns( server)?:?\\s*\$/i"
-
 /**
  * يطبق التغييرات داخل صفحة الراوتر عبر WebView بالبحث عن العناصر بنصوصها (Wireless, WAN, Save, Reboot...).
  * مصمم بحيث يتوقف بأمان لو لم يجد العناصر المتوقعة (لا يضغط حفظ إلا بعد تعبئة الحقول بنجاح).
@@ -166,61 +162,49 @@ class AutoApply(
     }
 
     /**
-     * يضبط الـ DNS من قائمة DHCP > DHCP Settings (حقلا Primary DNS / Secondary DNS).
-     * بعض الموديلات تفتح صفحة الإعدادات مباشرة عند الضغط على DHCP، وبعضها تحتاج الضغط على DHCP Settings،
-     * لذلك الضغط على الاسم الفرعي اختياري، والمعيار هو العثور فعلاً على حقل Primary DNS.
+     * يضبط DNS من قسم DHCP فقط (بدون WAN): يضغط على "DHCP" فتظهر حقول Primary/Secondary DNS،
+     * يملؤها، يحفظ، ثم يعيد قراءة القيمة للتأكد. يرجع true فقط لو القيمة اتحفظت فعلاً.
      */
     private suspend fun setDnsOnDhcp(): Boolean {
-        if (!click(listOf("dhcp", "dhcp server"), "left", tries = 4)) {
-            log("ℹ لم أجد قائمة DHCP")
+        if (!click(listOf("dhcp"), "left", tries = 6)) {
+            log("⚠ لم أجد قسم DHCP، تم تخطي DNS.")
             return false
         }
-        delay(900)
-        click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
         delay(1500)
-        val a = until("NB.fillIp($RE_DNS1,'$dnsP')", 10) { it == "ok" }
+        var a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 4) { it == "ok" }
         if (a != "ok") {
-            log("ℹ لم أجد حقول DNS في صفحة DHCP")
+            // بعض الموديلات تفتح صفحة فرعية اسمها DHCP Settings؛ نجربها كخطوة احتياطية فقط
+            if (click(listOf("dhcp settings"), "left", tries = 3)) delay(1500)
+            a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 8) { it == "ok" }
+        }
+        if (a != "ok") {
+            log("⚠ لم أجد حقول DNS في صفحة DHCP (لم يتم تغيير شيء).")
             return false
         }
-        val b = until("NB.fillIp($RE_DNS2,'$dnsS')", 4) { it == "ok" }
+        val b = until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 4) { it == "ok" }
         if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
         if (!click(listOf("save"), "last", tries = 6)) {
-            log("⚠ لم أجد زر الحفظ في صفحة DHCP")
+            log("⚠ لم أجد زر الحفظ في صفحة DHCP، لم يتم تغيير الـ DNS.")
             return false
         }
         delay(3500)
-        // إعادة فتح الصفحة وقراءة القيمة للتأكد أنها اتحفظت
-        click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
+        // إعادة فتح صفحة DHCP وقراءة القيمة للتأكد أنها اتحفظت
+        click(listOf("dhcp"), "left", tries = 3)
         delay(1500)
-        val v = until("NB.readIp($RE_DNS1)", 6) { it.isNotEmpty() }
-        if (v == dnsP) log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP")
-        else log("⚠ تم الحفظ لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
-        return true
-    }
-
-    private suspend fun setDnsOnWan(): Boolean {
-        val nav = click(listOf("network"), "left") && run {
-            delay(900)
-            click(listOf("wan"), "left")
+        var v = until("NB.readIp(/^(primary|preferred) dns/i)", 4) { it.isNotEmpty() }
+        if (v.isEmpty() && click(listOf("dhcp settings"), "left", tries = 2)) {
+            delay(1500)
+            v = until("NB.readIp(/^(primary|preferred) dns/i)", 4) { it.isNotEmpty() }
         }
-        if (!nav) return false
-        delay(1500)
-        click(listOf("advanced"), "last", tries = 4)
-        delay(1500)
-        js("NB.checkManual()")
-        delay(600)
-        val a = until("NB.fillIp($RE_DNS1,'$dnsP')", 6) { it == "ok" }
-        if (a != "ok") return false
-        until("NB.fillIp($RE_DNS2,'$dnsS')", 3) { it == "ok" }
-        if (!click(listOf("save"), "last", tries = 6)) return false
-        delay(3000)
-        if (click(listOf("save"), "last", tries = 2)) delay(3000)
-        log("✔ تم حفظ DNS في WAN")
-        return true
+        return if (v == dnsP) {
+            log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP / $dnsS")
+            true
+        } else {
+            log("⚠ لم يتأكد حفظ الـ DNS (قرأت: ${v.ifEmpty { "فارغ" }}).")
+            false
+        }
     }
 
-    /** يرجع true لو تم حفظ تغيير واحد على الأقل (وتمت إعادة تشغيل الراوتر وعاد الإنترنت). */
     suspend fun execute(): Boolean {
         log("التحقق من تسجيل الدخول...")
         val inn = until("NB.find('logout','left')?'yes':'no'", 45, 800) { it == "yes" }
@@ -231,7 +215,6 @@ class AutoApply(
 
         var channelSaved = false
         var dnsSaved = false
-        var dnsOnWan = false
 
         // ---------- القناة ----------
         if (channel != null) {
@@ -276,20 +259,9 @@ class AutoApply(
             }
         }
 
-        // ---------- DNS ----------
-        // الأولوية لصفحة DHCP (هي اللي فيها حقول DNS في هذا النوع من الراوترات)، ولو مش موجودة نجرب WAN
-        log("ضبط DNS: $dnsP / $dnsS ...")
-        if (setDnsOnDhcp()) {
-            dnsSaved = true
-        } else {
-            log("ℹ جاري المحاولة من صفحة WAN...")
-            if (setDnsOnWan()) {
-                dnsSaved = true
-                dnsOnWan = true
-            } else {
-                log("⚠ لم أجد حقول DNS لا في DHCP ولا في WAN (لم يتم تغيير شيء). قد يحتاج هذا الموديل ضبطاً يدوياً.")
-            }
-        }
+        // ---------- DNS (من صفحة DHCP) ----------
+        log("ضبط DNS من صفحة DHCP: $dnsP / $dnsS ...")
+        dnsSaved = setDnsOnDhcp()
 
         if (!channelSaved && !dnsSaved) {
             log("❌ لم يتم تطبيق أي تغيير، لذلك لن يتم إعادة تشغيل الراوتر.")
@@ -301,9 +273,8 @@ class AutoApply(
         click(listOf("status"), "left", tries = 6)
         val chRegex = channel?.let { Regex("Channel:\\s*$it\\b") }
         val page = until("NB.page()", 12, 4000) { p ->
-            (!dnsOnWan || p.contains(dnsP)) && (!channelSaved || chRegex == null || chRegex.containsMatchIn(p))
+            (!channelSaved || chRegex == null || chRegex.containsMatchIn(p))
         }
-        if (dnsOnWan) log(if (page.contains(dnsP)) "✔ تأكيد DNS: $dnsP" else "⚠ لم أتمكن من تأكيد الـ DNS من صفحة الحالة")
         if (channelSaved && chRegex != null) log(if (chRegex.containsMatchIn(page)) "✔ تأكيد القناة: $channel" else "⚠ لم أتمكن من تأكيد القناة من صفحة الحالة")
 
         // ---------- إعادة التشغيل ----------
