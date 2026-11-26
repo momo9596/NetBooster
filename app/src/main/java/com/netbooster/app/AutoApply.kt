@@ -161,43 +161,45 @@ class AutoApply(
         return false
     }
 
+    // أسماء الحقول في صفحة DHCP Settings لراوترات TP-Link: "DNS Server:" ثم "Secondary DNS Server:"
+    private val priRe = "/^(dns server|primary dns|preferred dns)/i"
+    private val secRe = "/^(secondary dns|alternate dns)/i"
+    private val dhcpSub = listOf("- dhcp settings", "dhcp settings")
+
     /**
-     * يضبط DNS من قسم DHCP فقط (بدون WAN): يضغط على "DHCP" فتظهر حقول Primary/Secondary DNS،
-     * يملؤها، يحفظ، ثم يعيد قراءة القيمة للتأكد. يرجع true فقط لو القيمة اتحفظت فعلاً.
+     * يضبط DNS من DHCP ← DHCP Settings: يملأ "DNS Server" و "Secondary DNS Server" ثم Save،
+     * ثم يعيد فتح الصفحة ويقرأ القيمة للتأكد. يرجع true فقط لو القيمة اتحفظت فعلاً.
      */
     private suspend fun setDnsOnDhcp(): Boolean {
-        if (!click(listOf("dhcp"), "left", tries = 6)) {
+        suspend fun open(tries: Int): Boolean {
+            if (!click(listOf("dhcp"), "left", tries = tries)) return false
+            delay(900)
+            click(dhcpSub, "left", tries = tries)
+            delay(1500)
+            return true
+        }
+        if (!open(6)) {
             log("⚠ لم أجد قسم DHCP، تم تخطي DNS.")
             return false
         }
-        delay(1500)
-        var a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 4) { it == "ok" }
+        val a = until("NB.fillIp($priRe,'$dnsP')", 10) { it == "ok" }
         if (a != "ok") {
-            // بعض الموديلات تفتح صفحة فرعية اسمها DHCP Settings؛ نجربها كخطوة احتياطية فقط
-            if (click(listOf("dhcp settings"), "left", tries = 3)) delay(1500)
-            a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 8) { it == "ok" }
-        }
-        if (a != "ok") {
-            log("⚠ لم أجد حقول DNS في صفحة DHCP (لم يتم تغيير شيء).")
+            log("⚠ لم أجد حقل DNS Server في صفحة DHCP Settings (لم يتم تغيير شيء).")
             return false
         }
-        val b = until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 4) { it == "ok" }
+        val b = until("NB.fillIp($secRe,'$dnsS')", 4) { it == "ok" }
         if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
         if (!click(listOf("save"), "last", tries = 6)) {
-            log("⚠ لم أجد زر الحفظ في صفحة DHCP، لم يتم تغيير الـ DNS.")
+            log("⚠ لم أجد زر Save في صفحة DHCP، لم يتم تغيير الـ DNS.")
             return false
         }
         delay(3500)
-        // إعادة فتح صفحة DHCP وقراءة القيمة للتأكد أنها اتحفظت
-        click(listOf("dhcp"), "left", tries = 3)
-        delay(1500)
-        var v = until("NB.readIp(/^(primary|preferred) dns/i)", 4) { it.isNotEmpty() }
-        if (v.isEmpty() && click(listOf("dhcp settings"), "left", tries = 2)) {
-            delay(1500)
-            v = until("NB.readIp(/^(primary|preferred) dns/i)", 4) { it.isNotEmpty() }
-        }
-        return if (v == dnsP) {
-            log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP / $dnsS")
+        // إعادة فتح الصفحة وقراءة القيمتين للتأكد
+        open(3)
+        val v = until("NB.readIp($priRe)", 5) { it.isNotEmpty() }
+        val v2 = js("NB.readIp($secRe)")
+        return if (v == dnsP && (b != "ok" || v2 == dnsS)) {
+            log("✔ تم حفظ DNS وتأكيده: $v / $v2")
             true
         } else {
             log("⚠ لم يتأكد حفظ الـ DNS (قرأت: ${v.ifEmpty { "فارغ" }}).")
