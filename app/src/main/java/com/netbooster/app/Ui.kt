@@ -122,6 +122,8 @@ private fun LtrField(value: String, label: String, onChange: (String) -> Unit, p
     }
 }
 
+// ------------------------------------------------------------------ Setup
+
 @Composable
 private fun SetupScreen(vm: MainViewModel) {
     val s = vm.state
@@ -182,6 +184,8 @@ private fun SetupScreen(vm: MainViewModel) {
         )
     }
 }
+
+// ------------------------------------------------------------------ Analysis
 
 @Composable
 private fun StepRow(st: Step) {
@@ -334,6 +338,8 @@ private fun AnalysisScreen(vm: MainViewModel) {
     }
 }
 
+// ------------------------------------------------------------------ Router web page
+
 @Composable
 private fun WebScreen(vm: MainViewModel) {
     val s = vm.state
@@ -357,6 +363,7 @@ private fun WebScreen(vm: MainViewModel) {
         scope.launch {
             busy = true; busyFlag[0] = true; logs.clear()
             var ok = false
+            // محاولتان: لو فشلت الأولى (صفحة لم تُحمّل أو انقطاع) نعيد تحميل الصفحة ونحاول مرة أخرى
             for (attempt in 1..2) {
                 ok = try {
                     val clean = (s.channels?.scores?.firstOrNull { it.channel == bestCh }?.congestion ?: 9.0) < 0.4
@@ -380,6 +387,7 @@ private fun WebScreen(vm: MainViewModel) {
         }
     }
 
+    // التشغيل التلقائي بدون أي تدخل: بمجرد فتح صفحة الراوتر بعد التحليل
     LaunchedEffect(web) {
         if (web != null && vm.state.autoPending && p.isNotEmpty() && sec.isNotEmpty()) {
             vm.consumeAuto()
@@ -388,6 +396,7 @@ private fun WebScreen(vm: MainViewModel) {
         }
     }
 
+    // إبقاء الشاشة مضيئة أثناء التنفيذ، ومنع الرجوع حتى لا تُقطع العملية في المنتصف
     LaunchedEffect(busy) { web?.keepScreenOn = busy }
     BackHandler(enabled = busy) { }
 
@@ -437,7 +446,7 @@ private fun WebScreen(vm: MainViewModel) {
                             val msg = when (r?.trim('"')) {
                                 "ok", "octets" -> "تمت تعبئة DNS، اضغط حفظ/Apply في صفحة الراوتر"
                                 "one" -> "تمت تعبئة حقل واحد فقط، أكمل الثاني يدوياً ثم احفظ"
-                                else -> "لم أجد حقول DNS. افتح صفحة إعدادات الإنترنت/WAN/DHCP واختر DNS يدوي ثم اضغط مرة أخرى"
+                                else -> "لم أجد حقول DNS. افتح قسم DHCP في الراوتر ثم اضغط مرة أخرى"
                             }
                             Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                         }
@@ -505,6 +514,7 @@ private fun WebScreen(vm: MainViewModel) {
                             view.evaluateJavascript(RouterJs.login(s.user, s.pass), null)
                         }
 
+                        // شهادات الراوتر المحلية غالباً self-signed: نقبلها لعنوان الراوتر فقط
                         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                             if (error.url.contains(ip)) handler.proceed() else handler.cancel()
                         }
