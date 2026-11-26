@@ -100,31 +100,48 @@ var NB={
   }
   return '';
  },
- dhcpInputs:function(){
-  var res=null;
-  NB.docs().forEach(function(d){
-   if(res||!d.body)return;
-   var t=(d.body.innerText||'');
-   if(!/dns/i.test(t))return;
-   var ins=[].slice.call(d.querySelectorAll('input')).filter(function(i){var ty=(i.type||'text').toLowerCase();return (ty==='text'||ty==='tel'||ty==='')&&NB.vis(i)&&!i.disabled;});
-   if(ins.length>=2)res=ins;
+ wins:function(){var r=[];(function w(x,p){try{r.push({w:x,d:x.document,path:p});for(var i=0;i<x.frames.length;i++)w(x.frames[i],p+'/'+i);}catch(e){}})(window,'top');return r;},
+ content:function(){
+  var best=null;
+  NB.wins().forEach(function(o){
+   if(o.w===window)return;
+   var u='';try{u=o.w.location.pathname.split('/').pop();}catch(e){}
+   if(/^(menu|top|banner|bottom)/i.test(u))return;
+   if(o.w.name==='mainFrame')best=o;
+   else if(!best&&/rpm\.htm/i.test(u))best=o;
   });
-  return res;
+  return best?best.w:null;
  },
- findDns:function(){
-  var ins=NB.dhcpInputs();
-  if(!ins)return null;
-  var named=ins.filter(function(i){return /dns/i.test((i.name||'')+(i.id||''));});
-  var pair=named.length>=2?named.slice(0,2):ins.slice(-2);
-  var ok=pair.every(function(i){return /^[0-9.]*$/.test(i.value||'');});
-  return ok?pair:null;
+ go:function(page){var c=NB.content();if(!c)return 'nocontent';try{c.location.href=page;return 'go';}catch(e){return 'err';}},
+ dnsIn:function(){
+  var r=[];
+  NB.docs().forEach(function(d){[].slice.call(d.querySelectorAll('input')).forEach(function(i){
+   var t=(i.type||'text').toLowerCase(),k=((i.name||'')+(i.id||'')).toLowerCase();
+   if(/dns/.test(k)&&(t==='text'||t==='tel'||t==='')&&NB.vis(i))r.push(i);
+  });});
+  return r;
  },
- setDns:function(p,s){var f=NB.findDns();if(!f)return 'nofield';NB.setv(f[0],p);NB.setv(f[1],s);return 'ok';},
- readDns:function(){var f=NB.findDns();return f?(f[0].value+'|'+f[1].value):'';},
- diag:function(){var r=[];NB.docs().forEach(function(d){var n=d.querySelectorAll('input').length;var b=d.body?(d.body.innerText||'').replace(/\s+/g,' ').slice(0,60):'';r.push(n+' inputs: '+b);});return r.join(' || ');},
- hook:function(){NB.docs().forEach(function(d){try{var w=d.defaultView;w.alert=function(m){window.top.__nb=(window.top.__nb||'')+'alert:'+m+' ; ';};w.confirm=function(m){window.top.__nb=(window.top.__nb||'')+'confirm:'+m+' ; ';return true;};}catch(e){}});return 'ok';},
- alerts:function(){return window.top.__nb||'';},
- saveDns:function(){var f=NB.findDns();if(!f)return 'nofield';var d=f[0].ownerDocument;var c=[].slice.call(d.querySelectorAll('input,button,a')).filter(function(e){return NB.vis(e)&&/^save$/i.test((e.value||e.innerText||'').trim());});if(!c.length)return 'nosave';c[c.length-1].click();return 'clicked';},
+ fillDnsByName:function(a,b){
+  var l=NB.dnsIn();
+  if(!l.length)return 'none';
+  if(l[0].disabled)return 'disabled';
+  var small=l.filter(function(i){return i.maxLength>0&&i.maxLength<=3;});
+  if(small.length>=8){var A=a.split('.'),B=b.split('.');for(var q=0;q<4;q++){NB.setv(small[q],A[q]);NB.setv(small[4+q],B[q]);}return 'ok';}
+  var p=null,s=null;
+  l.forEach(function(i){var k=((i.name||'')+(i.id||'')).toLowerCase();if(!s&&/(2|sec|alt)/.test(k))s=i;else if(!p)p=i;});
+  if(!p)p=l[0];
+  NB.setv(p,a);
+  if(s){NB.setv(s,b);return 'ok';}
+  return 'one';
+ },
+ dnsVals:function(){return NB.dnsIn().map(function(i){return i.value;}).join('|');},
+ diag:function(){
+  return NB.wins().map(function(o){
+   var u='';try{u=o.w.location.pathname.split('/').pop();}catch(e){}
+   var ins=[].slice.call(o.d.querySelectorAll('input,select')).slice(0,12).map(function(i){return i.name||i.id||i.type;}).join(',');
+   return o.path+' '+u+' ['+ins+']';
+  }).join(' ## ');
+ },
  page:function(){var t=NB.docs().map(function(d){return d.body?d.body.innerText:'';}).join('\n');return t.length>30000?t.slice(0,30000):t;}
 };
 """.trimIndent()
@@ -186,68 +203,66 @@ class AutoApply(
         return false
     }
 
-    private val dhcpSub = listOf("- dhcp settings", "dhcp settings")
-    private val dhcpOther = listOf("- dhcp clients list", "dhcp clients list")
+    private suspend fun dhcpFieldsReady(): Boolean =
+        until("NB.dnsIn().length>0?'y':'n'", 8, 600) { it == "y" } == "y"
 
-    /** يفتح DHCP Settings. force=true: يزور صفحة أخرى أولاً لإجبار الراوتر على إعادة تحميل القيم المحفوظة. */
-    private suspend fun openDhcp(force: Boolean) {
-        if (!force && js("NB.findDns()?'yes':'no'") == "yes") return
-        click(listOf("dhcp"), "left", tries = 6)
-        delay(900)
-        if (force) {
-            click(dhcpOther, "left", tries = 3)
-            delay(1500)
+    /** يفتح صفحة DHCP Settings: أولاً برابط مباشر داخل الإطار الرئيسي (أضمن)، ثم بالضغط على القائمة. */
+    private suspend fun openDhcpPage(): Boolean {
+        val g = js("NB.go('LanDhcpServerRpm.htm')")
+        if (g == "go") {
+            delay(1800)
+            if (dhcpFieldsReady()) return true
         }
-        click(dhcpSub, "left", tries = 4)
-        delay(1500)
+        if (click(listOf("dhcp"), "left", tries = 4)) {
+            delay(1000)
+            if (click(listOf("dhcp settings"), "left", tries = 4)) {
+                delay(1800)
+                if (dhcpFieldsReady()) return true
+            }
+        }
+        return false
     }
 
-    /**
-     * يفتح DHCP Settings، يستبدل DNS Server و Secondary DNS Server بأسرع سيرفرين، يتأكد أنهم اتكتبوا في الخانتين،
-     * يضغط Save، ثم ينتظر (حتى ~30 ثانية) ويعيد تحميل الصفحة فعلياً ويقرأ القيم المحفوظة من الراوتر.
-     */
+    /** يضبط DNS في صفحة DHCP (الأسهل والأضمن لأن الراوتر يوزعه على كل الأجهزة). */
     private suspend fun setDnsOnDhcp(): Boolean {
-        val want = "$dnsP|$dnsS"
-        openDhcp(false)
-
-        var filled = false
-        for (i in 0 until 3) {
-            val a = until("NB.setDns('$dnsP','$dnsS')", 12) { it == "ok" }
-            if (a != "ok") break
-            if (until("NB.readDns()", 2, 300) { it == want } == want) { filled = true; break }
-            delay(500)
-        }
-        if (!filled) {
-            log("⚠ لم أستطع كتابة DNS في خانتي صفحة DHCP (لم يتم تغيير شيء).")
-            log("ℹ " + js("NB.diag()").take(300))
+        if (!openDhcpPage()) {
+            log("⚠ لم أتمكن من فتح صفحة DHCP Settings")
+            log("تشخيص: " + js("NB.diag()"))
             return false
         }
-
-        js("NB.hook()")   // لالتقاط رسائل الراوتر (alert/confirm) والموافقة على أي confirm
-        val clicked = until("NB.saveDns()", 6) { it == "clicked" } == "clicked" ||
-                click(listOf("save"), "last", tries = 3)
-        if (!clicked) {
-            log("⚠ لم أجد زر Save في صفحة DHCP، لم يتم تغيير الـ DNS.")
+        var r = js("NB.fillDnsByName('$dnsP','$dnsS')")
+        if (r == "none") {
+            // احتياط: البحث بنص العنوان بدل اسم الحقل
+            val a = js("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')")
+            val b = js("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')")
+            r = if (a == "ok" && b == "ok") "ok" else if (a == "ok") "one" else "none"
+        }
+        if (r == "disabled") {
+            log("⚠ حقول DNS معطلة: خدمة DHCP Server مغلقة في الراوتر")
             return false
         }
-
-        // انتظار الحفظ ثم قراءة القيم من الراوتر بعد إعادة تحميل حقيقية للصفحة
-        var v = ""
-        for (round in 0 until 6) {
-            delay(5000)
-            openDhcp(true)
-            v = until("NB.readDns()", 3, 800) { it.isNotEmpty() }
-            if (v == want) break
+        if (r == "none") {
+            log("⚠ لم أجد حقول DNS في صفحة DHCP")
+            log("تشخيص: " + js("NB.diag()"))
+            return false
         }
-        val msg = js("NB.alerts()")
-        if (msg.isNotEmpty()) log("ℹ رسالة الراوتر: " + msg.take(200))
-        return if (v == want) {
-            log("✔ تم حفظ DNS وتأكيده: $dnsP / $dnsS")
-            true
-        } else {
-            log("⚠ لم يتأكد حفظ الـ DNS (قرأت: ${v.ifEmpty { "فارغ" }}).")
-            false
+        if (r == "one") log("⚠ تم ملء الـ DNS الأساسي فقط")
+        delay(500)
+        val filled = js("NB.dnsVals()")
+        if (!filled.contains(dnsP)) {
+            log("⚠ الحقول لم تقبل القيمة (قرأت: $filled)")
+            return false
         }
+        if (!click(listOf("save"), "last", tries = 6)) {
+            log("⚠ لم أجد زر Save في صفحة DHCP")
+            return false
+        }
+        delay(3500)
+        // إعادة فتح الصفحة وقراءة القيمة المحفوظة فعلاً
+        val v = if (openDhcpPage()) js("NB.dnsVals()") else ""
+        if (v.contains(dnsP)) log("✔ تم حفظ DNS في DHCP وتأكيده: $v")
+        else log("⚠ تم الضغط على Save لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
+        return true
     }
 
     suspend fun execute(): Boolean {
@@ -304,7 +319,7 @@ class AutoApply(
             }
         }
 
-        // ---------- DNS (من صفحة DHCP) ----------
+        // ---------- DNS ----------
         log("ضبط DNS من صفحة DHCP: $dnsP / $dnsS ...")
         dnsSaved = setDnsOnDhcp()
 
