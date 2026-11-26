@@ -3,16 +3,13 @@ package com.netbooster.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.http.SslError
-import android.webkit.HttpAuthHandler
-import android.webkit.SslErrorHandler
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.webkit.*
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,8 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
@@ -59,18 +59,12 @@ fun App(vm: MainViewModel) {
             BackHandler(enabled = s.screen != Screen.SETUP) { vm.back() }
             Box(modifier = Modifier.fillMaxSize().background(BgGradient)) {
                 Column(Modifier.fillMaxSize()) {
-                    // الهيدر
-                    Surface(
-                        color = Color(0xFF0F172A).copy(alpha = 0.95f),
-                        shadowElevation = 8.dp,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Surface(color = Color(0xFF0F172A).copy(alpha = 0.95f), shadowElevation = 8.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("NetBooster Pro", fontSize = 22.sp, fontWeight = FontWeight.Black, color = Accent, letterSpacing = 1.sp)
                             Text("المطور: محمد إبراهيم", fontSize = 13.sp, color = Muted, fontWeight = FontWeight.Medium)
                         }
                     }
-
                     when (s.screen) {
                         Screen.SETUP -> SetupScreen(vm)
                         Screen.ANALYSIS -> AnalysisScreen(vm)
@@ -89,53 +83,28 @@ private fun SetupScreen(vm: MainViewModel) {
     var showManualInput by remember { mutableStateOf(false) }
     
     fun hasLocation() = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { 
-        if (s.routerIp.isNotEmpty()) vm.start(it)
-    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (s.routerIp.isNotEmpty()) vm.start(it) }
 
-    LaunchedEffect(Unit) {
-        delay(8000)
-        if (s.screen == Screen.SETUP) showManualInput = true
-    }
-
+    LaunchedEffect(Unit) { delay(6000); if (s.screen == Screen.SETUP) showManualInput = true }
     LaunchedEffect(Unit) {
         if (s.routerIp.isNotEmpty() && !showManualInput) {
             if (hasLocation()) vm.start(true) else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
 
-    Column(
-        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(40.dp))
-        
         if (!showManualInput) {
             val infiniteTransition = rememberInfiniteTransition(label = "")
             val alpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "")
-            
             CircularProgressIndicator(color = Accent, strokeWidth = 5.dp, modifier = Modifier.size(80.dp))
             Spacer(Modifier.height(24.dp))
-            Text("جاري التهيئة وفحص الشبكة...", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.alpha(alpha))
-            Text("يرجى الانتظار بينما نقوم بقياس سرعة الشبكة", color = Muted, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top=8.dp))
+            Text("جاري التهيئة والفحص المتوازي...", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.alpha(alpha))
         } else {
-            Text("تأخر الاتصال بالراوتر التلقائي", color = Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            OutlinedTextField(
-                value = s.routerIp,
-                onValueChange = { vm.onIp(it) },
-                label = { Text("Router IP") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent)
-            )
+            Text("تأخر الاتصال التلقائي", color = Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            OutlinedTextField(value = s.routerIp, onValueChange = { vm.onIp(it) }, label = { Text("Router IP") }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(24.dp))
-            Button(
-                onClick = { 
-                    if (hasLocation()) vm.start(true) else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
+            Button(onClick = { if (hasLocation()) vm.start(true) else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                 Text("بدء الفحص الآن", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
@@ -151,16 +120,10 @@ private fun AnalysisScreen(vm: MainViewModel) {
             s.comparison?.let { cmp ->
                 val pct = cmp.overallPct
                 val isGood = pct >= 0
-                Card(
-                    Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = if (isGood) Color(0xFF064E3B) else Color(0xFF7F1D1D)),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if(isGood) Good else Bad)
-                ) {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (isGood) Color(0xFF064E3B) else Color(0xFF7F1D1D)), shape = RoundedCornerShape(24.dp), border = androidx.compose.foundation.BorderStroke(1.dp, if(isGood) Good else Bad)) {
                     Column(Modifier.padding(24.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (isGood) "تم تحسين الشبكة بنجاح!" else "لم يحدث تحسن", color = if(isGood) Good else Warn, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         Text(if (isGood) "+${fmt(pct, 0)}%" else "${fmt(pct, 0)}%", fontSize = 72.sp, fontWeight = FontWeight.Black, color = if(isGood) Good else Bad)
-                        Text("معدل التحسين الكلي", color = Muted, fontSize = 14.sp)
                     }
                 }
             }
@@ -170,17 +133,51 @@ private fun AnalysisScreen(vm: MainViewModel) {
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CardBg), shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Accent, strokeWidth = 4.dp)
-                    Text(if (s.retesting) "جاري إعادة القياس بعد التعديل..." else "جاري الفحص الشامل...", color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
+                    Text(if (s.retesting) "جاري إعادة القياس..." else "جاري الفحص المتوازي...", color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
                 }
             }
         }
 
-        Card(
-            Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(12.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
-        ) {
+        // مؤشر صحة الشبكة الاحترافي (يظهر عند اكتمال الفحص)
+        if (!s.running && s.comparison == null && s.healthScore > 0) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CardBg), shape = RoundedCornerShape(24.dp)) {
+                Column(Modifier.padding(24.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("مؤشر صحة الشبكة الحالية", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Box(contentAlignment = Alignment.Center) {
+                        // الدائرة الخلفية
+                        Canvas(modifier = Modifier.size(160.dp)) {
+                            drawArc(
+                                color = Color(0xFF334155),
+                                startAngle = 135f,
+                                sweepAngle = 270f,
+                                useCenter = false,
+                                style = Stroke(width = 16.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
+                        // الدائرة المتحركة (مؤشر النتيجة)
+                        val animatedScore by animateFloatAsState(targetValue = s.healthScore.toFloat(), animationSpec = tween(1500, easing = FastOutSlowInEasing), label = "score")
+                        Canvas(modifier = Modifier.size(160.dp)) {
+                            val sweep = (animatedScore / 100f) * 270f
+                            drawArc(
+                                color = if (s.healthScore > 70) Good else if (s.healthScore > 40) Warn else Bad,
+                                startAngle = 135f,
+                                sweepAngle = sweep,
+                                useCenter = false,
+                                style = Stroke(width = 16.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${s.healthScore}", fontSize = 48.sp, fontWeight = FontWeight.Black, color = if (s.healthScore > 70) Good else if (s.healthScore > 40) Warn else Bad)
+                            Text("من 100", fontSize = 12.sp, color = Muted)
+                        }
+                    }
+                }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.5f)), shape = RoundedCornerShape(12.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("سجل الفحص", color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 s.steps.forEach { StepRow(it) }
@@ -213,15 +210,13 @@ private fun StepRow(st: Step) {
     }
 }
 
-// ---------------------------------------------------------
-// الشاشة الاحترافية الجديدة (الراوتر المباشر + لوحة التحكم)
-// ---------------------------------------------------------
 @Composable
 private fun WebScreen(vm: MainViewModel) {
     val s = vm.state
     var web by remember { mutableStateOf<WebView?>(null) }
     var busy by remember { mutableStateOf(false) }
     var isPageLoading by remember { mutableStateOf(true) }
+    var hasError by remember { mutableStateOf(false) }
     val busyFlag = remember { booleanArrayOf(false) }
     val logs = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
@@ -238,57 +233,34 @@ private fun WebScreen(vm: MainViewModel) {
         scope.launch {
             busy = true; busyFlag[0] = true; logs.clear()
             logs.add("⏳ جاري الاتصال بالراوتر...")
-            
-            var ok = try {
-                AutoApply(w, ip, p, sec, bestCh, profile) { logs.add(it) }.execute()
-            } catch (e: Exception) { false }
-            
+            var ok = try { AutoApply(w, ip, p, sec, bestCh, profile) { logs.add(it) }.execute() } catch (e: Exception) { false }
             busyFlag[0] = false; busy = false
-            if (ok) {
-                logs.add("✅ تم التعديل بنجاح!")
-                delay(1500)
-                vm.retest()
-                vm.goto(Screen.ANALYSIS)
-            } else {
-                logs.add("❌ فشل التعديل التلقائي.")
-            }
+            if (ok) { logs.add("✅ تم التعديل بنجاح!"); delay(1500); vm.retest(); vm.goto(Screen.ANALYSIS) } else { logs.add("❌ فشل التعديل.") }
         }
     }
 
     LaunchedEffect(web) {
         if (web != null && vm.state.autoPending && p.isNotEmpty() && sec.isNotEmpty()) {
-            vm.consumeAuto()
-            delay(3000) // وقت بسيط لتحميل الصفحة الأولى
-            applyNow()
+            vm.consumeAuto(); delay(3000); applyNow()
         }
     }
 
-    // هنا التصميم الجديد: صفحة الراوتر في الخلفية، ولوحة التحكم تطفو فوقها
     Box(modifier = Modifier.fillMaxSize()) {
-        
-        // 1. صفحة الراوتر (WebView)
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
                 WebView(c).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     var authTries = 0
                     webViewClient = object : WebViewClient() {
-                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                            isPageLoading = true
-                        }
-                        override fun onPageFinished(view: WebView, url: String?) {
-                            isPageLoading = false
-                            view.evaluateJavascript(RouterJs.login(s.user, s.pass), null)
-                        }
-                        override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String?, realm: String?) {
-                            if (authTries < 3) { authTries++; handler.proceed(s.user, s.pass) } else handler.cancel()
-                        }
-                        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                            if (error.url.contains(ip)) handler.proceed() else handler.cancel()
-                        }
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) { isPageLoading = true; hasError = false }
+                        override fun onPageFinished(view: WebView, url: String?) { isPageLoading = false; view.evaluateJavascript(RouterJs.login(s.user, s.pass), null) }
+                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) { super.onReceivedError(view, request, error); isPageLoading = false; hasError = true }
+                        override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String?, realm: String?) { if (authTries < 3) { authTries++; handler.proceed(s.user, s.pass) } else handler.cancel() }
+                        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { if (error.url.contains(ip)) handler.proceed() else handler.cancel() }
                     }
                     loadUrl("http://$ip/")
                     web = this
@@ -296,49 +268,35 @@ private fun WebScreen(vm: MainViewModel) {
             }
         )
 
-        // 2. شاشة تحميل شفافة (تظهر فقط عندما يبدأ المتصفح في التحميل لأول مرة)
-        if (isPageLoading && !busy) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF020617).copy(alpha = 0.8f)), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Accent)
+        if (isPageLoading && !busy && !hasError) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF020617)), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { CircularProgressIndicator(color = Accent); Spacer(Modifier.height(16.dp)); Text("جاري الاتصال بالراوتر...", color = Accent) }
             }
         }
 
-        // 3. لوحة التحكم الزجاجية (HUD) التي تطفو فوق صفحة الراوتر
+        if (hasError && !busy) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF020617)), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("تعذر الاتصال", color = Bad, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Button(onClick = { hasError = false; isPageLoading = true; web?.loadUrl("http://$ip/") }, modifier = Modifier.padding(top=16.dp)) { Text("إعادة المحاولة") }
+                }
+            }
+        }
+
         if (busy) {
             Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xEE0F172A)) // لون داكن شبه شفاف
-                    .padding(20.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xEE0F172A)).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // معلومات الإعدادات الجديدة
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("DNS الأساسي", color = Muted, fontSize = 12.sp)
-                        Text(p, color = Good, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("القناة الجديدة", color = Muted, fontSize = 12.sp)
-                        Text(if (bestCh != null) bestCh.toString() else "تلقائي", color = Good, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
+                    Column { Text("DNS الأساسي", color = Muted, fontSize = 12.sp); Text(p, color = Good, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                    Column(horizontalAlignment = Alignment.End) { Text("القناة الجديدة", color = Muted, fontSize = 12.sp); Text(if (bestCh != null) bestCh.toString() else "تلقائي", color = Good, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
                 }
-                
                 Divider(color = Muted.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 12.dp))
-                
-                // شريط التحميل والرسالة
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = logs.lastOrNull() ?: "جاري المعالجة...",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Text(text = logs.lastOrNull() ?: "جاري المعالجة...", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
