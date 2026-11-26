@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +31,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch // تم إضافة هذا الاستيراد المهم
 import kotlin.math.abs
 
 private val Bg = Color(0xFF0B131E)
@@ -140,11 +139,12 @@ private fun WebScreen(vm: MainViewModel) {
     val sec = s.dns?.secondary?.ip ?: ""
     val ip = s.routerIp
     val bestCh = s.channels?.best
-    val profile = s.profile ?: knownRouters.last() // هنا نستخدم ملف الراوتر المكتشف
+    val profile = s.profile ?: knownRouters.last()
 
     fun applyNow() {
         val w = web ?: return
         if (busyFlag[0]) return
+        // هنا تم إصلاح الخطأ بوضع الاستدعاء داخل scope.launch
         scope.launch {
             busy = true; busyFlag[0] = true; logs.clear()
             var ok = try {
