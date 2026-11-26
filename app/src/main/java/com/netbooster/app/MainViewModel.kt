@@ -55,6 +55,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeAuto() { state = state.copy(autoPending = false) }
     private var job: Job? = null
 
+    // هاتان الدالتان كانتا ناقصتين وتم إضافتهما الآن
+    fun goto(s: Screen) { state = state.copy(screen = s) }
+    fun back() {
+        state = when (state.screen) {
+            Screen.WEB -> state.copy(screen = Screen.ANALYSIS)
+            Screen.ANALYSIS -> { job?.cancel(); state.copy(screen = Screen.SETUP, running = false) }
+            else -> state
+        }
+    }
+
     fun detectRouter() {
         val ip = Gateway.gatewayIp(getApplication())
         state = state.copy(
