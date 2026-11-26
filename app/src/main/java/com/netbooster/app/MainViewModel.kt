@@ -9,10 +9,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import kotlin.math.roundToInt
 
 data class UiState(
     val screen: Screen = Screen.SETUP,
@@ -35,7 +33,8 @@ data class UiState(
     val retesting: Boolean = false,
     val auto: Boolean = true,
     val autoPending: Boolean = false,
-    val profile: RouterProfile? = null
+    val profile: RouterProfile? = null,
+    val healthScore: Int = 0 // مؤشر صحة الشبكة الجديد (من 100)
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -55,7 +54,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeAuto() { state = state.copy(autoPending = false) }
     private var job: Job? = null
 
-    // هاتان الدالتان كانتا ناقصتين وتم إضافتهما الآن
     fun goto(s: Screen) { state = state.copy(screen = s) }
     fun back() {
         state = when (state.screen) {
@@ -69,7 +67,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ip = Gateway.gatewayIp(getApplication())
         state = state.copy(
             routerIp = ip ?: state.routerIp,
-            error = if (ip == null) "لم يتم العثور على الراوتر تلقائياً، يرجى كتابة الـ IP يدوياً." else ""
+            error = if (ip == null) "لم يتم العثور على الراوتر تلقائياً." else ""
         )
     }
 
@@ -81,38 +79,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun start(hasLocation: Boolean) {
         val ip = state.routerIp.trim()
         if (ip.isEmpty() || !ip.contains(".")) {
-            state = state.copy(error = "عنوان IP غير صحيح، يرجى كتابته يدوياً (مثال: 192.168.1.1)")
+            state = state.copy(error = "عنوان IP غير صحيح")
             return
         }
         prefs.edit().putString("ip", ip).apply()
         job?.cancel()
-        job = viewModelScope.launch { runAll(ip, hasLocation) }
+        job = viewModelScope.launch { runAllFast(ip, hasLocation) }
     }
 
     private fun setStep(id: String, status: Status, detail: String = "") {
         state = state.copy(steps = state.steps.map { if (it.id == id) it.copy(status = status, detail = detail) else it })
     }
 
-    private suspend fun <T> step(id: String, block: suspend () -> Pair<T, String>): T? {
-        setStep(id, Status.RUNNING)
-        return try {
-            val (v, d) = block()
-            setStep(id, Status.DONE, d)
-            v
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setStep(id, Status.FAILED, e.message ?: "خطأ")
-            null
-        }
-    }
-
-    private suspend fun runAll(ip: String, hasLocation: Boolean) {
+    // دالة الفحص السريع (تستخدم التزامن لتقليل الوقت)
+    private suspend fun runAllFast(ip: String, hasLocation: Boolean) = coroutineScope {
         val ctx = getApplication<Application>()
         state = state.copy(
             screen = Screen.ANALYSIS, error = "", running = true,
             steps = listOf(
-                Step("router", "فحص الراوتر وتسجيل الدخول"),
+                Step("router", "فحص الراوتر"),
                 Step("speed", "قياس السرعة الحالية"),
                 Step("dns", "اختبار أسرع سيرفرات DNS"),
                 Step("ports", "فحص منافذ الراوتر"),
@@ -124,58 +109,87 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
         val issues = mutableListOf<Issue>()
 
-        val router = step("router") {
+        // إطلاق الفحوصات معاً في الخلفية
+        val routerDeferred = async {
+            setStep("router", Status.RUNNING)
             val r = Probe.probeRouter(ip, state.user, state.pass)
-            r to (if (r.reachable) "${r.vendor} • ${r.note}" else r.note)
+            setStep("router", Status.DONE, if (r.reachable) r.vendor else r.note)
+            r
         }
-        state = state.copy(router = router)
 
-        val vendorName = router?.vendor ?: ""
-        val matchedProfile = knownRouters.firstOrNull { it.brand.contains(vendorName, ignoreCase = true) } ?: knownRouters.last()
-        state = state.copy(profile = matchedProfile)
+        val portsDeferred = async {
+            setStep("ports", Status.RUNNING)
+            val r = Probe.scanPorts(ip)
+            setStep("ports", Status.DONE, if (r.none { it.open }) "آمن" else "منافذ مفتوحة")
+            r
+        }
 
-        val speed = step("speed") {
+        val wifiDeferred = async {
+            if (!hasLocation) {
+                setStep("wifi", Status.SKIPPED, "يحتاج إذن الموقع")
+                null
+            } else {
+                setStep("wifi", Status.RUNNING)
+                val r = WifiChannels.scan(ctx)
+                setStep("wifi", Status.DONE, if(r != null) "أفضل قناة: ${r.best}" else "تعذر")
+                r
+            }
+        }
+
+        // فحوصات الإنترنت (تعمل معاً)
+        val speedDeferred = async {
+            setStep("speed", Status.RUNNING)
             val down = SpeedTest.download()
             val up = SpeedTest.upload()
             val pg = Probe.ping("1.1.1.1", "1.1.1.1", 443, 5).avg
-            SpeedResult(down, up, pg) to "تحميل ${fmt(down, 1)} • رفع ${fmt(up, 1)} Mbps"
+            val r = SpeedResult(down, up, pg)
+            setStep("speed", Status.DONE, "تحميل ${fmt(down, 1)} • رفع ${fmt(up, 1)}")
+            r
         }
-        state = state.copy(speed = speed)
 
-        val currentDns = Gateway.currentDns(ctx)
-        val dns = step("dns") {
+        val dnsDeferred = async {
+            setStep("dns", Status.RUNNING)
+            val currentDns = Gateway.currentDns(ctx)
             val rep = DnsBenchmark.run(currentDns) { done, total -> setStep("dns", Status.RUNNING, "$done / $total") }
-            rep to (if (rep.primary != null) "الأفضل: ${rep.primary.name}" else "لا يوجد")
+            setStep("dns", Status.DONE, if (rep.primary != null) "الأفضل: ${rep.primary.name}" else "لا يوجد")
+            rep
         }
-        state = state.copy(dns = dns)
 
-        val ports = step("ports") {
-            val r = Probe.scanPorts(ip)
-            r to (if (r.none { it.open }) "لا توجد منافذ مفتوحة" else "يوجد منافذ مفتوحة")
-        }
-        state = state.copy(ports = ports ?: emptyList())
-
-        val pings = step("ping") {
+        val pingDeferred = async {
+            setStep("ping", Status.RUNNING)
             val list = listOf(Probe.pingGateway(ip, emptyList()), Probe.ping("Cloudflare", "1.1.1.1", 443), Probe.ping("Google", "8.8.8.8", 443))
-            list to "متوسط ${fmt(list.drop(1).map { it.avg }.average(), 0)} ms"
-        }
-        state = state.copy(pings = pings ?: emptyList())
-
-        if (!hasLocation) {
-            setStep("wifi", Status.SKIPPED, "يحتاج إذن الموقع")
-        } else {
-            val ch = step("wifi") {
-                val r = WifiChannels.scan(ctx) ?: throw IllegalStateException("تعذر الفحص")
-                r to "أفضل قناة: ${r.best}"
-            }
-            state = state.copy(channels = ch)
+            setStep("ping", Status.DONE, "متوسط ${fmt(list.drop(1).map { it.avg }.average(), 0)} ms")
+            list
         }
 
-        val baseline = if (speed != null && pings != null) MetricsTool.from(speed, pings, MetricsTool.systemDnsMs()) else null
-        state = state.copy(issues = issues, running = false, before = baseline, after = null, comparison = null)
+        // جمع النتائج
+        val router = routerDeferred.await()
+        val ports = portsDeferred.await()
+        val channels = wifiDeferred.await()
+        val speed = speedDeferred.await()
+        val dns = dnsDeferred.await()
+        val pings = pingDeferred.await()
 
-        val d = state.dns
-        val ok = router != null && router.reachable && router.authOk != false && d?.primary != null && d.secondary != null
+        state = state.copy(
+            router = router, ports = ports, channels = channels,
+            speed = speed, dns = dns, pings = pings
+        )
+
+        val vendorName = router?.vendor ?: ""
+        val matchedProfile = knownRouters.firstOrNull { it.brand.contains(vendorName, ignoreCase = true) } ?: knownRouters.firstOrNull { it.brand == "TP-Link" } ?: knownRouters.last()
+        
+        // حساب مؤشر صحة الشبكة (0-100)
+        val speedScore = ((speed?.downMbps ?: 0.0) / 50.0 * 100).coerceIn(0.0, 100.0) // 50Mbps = 100%
+        val pingScore = (100 - ((pings?.drop(1)?.map { it.avg }?.average() ?: 100.0) / 2.0)).coerceIn(0.0, 100.0) // كل 2ms يخصم 1
+        val health = ((speedScore * 0.6) + (pingScore * 0.4)).roundToInt()
+
+        val baseline = if (speed != null && pings.isNotEmpty()) MetricsTool.from(speed, pings, MetricsTool.systemDnsMs()) else null
+        state = state.copy(
+            issues = issues, running = false, before = baseline, after = null, comparison = null,
+            profile = matchedProfile, healthScore = health
+        )
+
+        val ok = router != null && router.reachable && router.authOk != false && dns?.primary != null && dns.secondary != null
         if (state.auto && ok) {
             state = state.copy(autoPending = true, screen = Screen.WEB)
         }
