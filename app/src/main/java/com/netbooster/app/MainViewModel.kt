@@ -35,7 +35,7 @@ data class UiState(
     val retesting: Boolean = false,
     val auto: Boolean = true,
     val autoPending: Boolean = false,
-    val profile: RouterProfile? = null // المتغير الجديد لملف الراوتر
+    val profile: RouterProfile? = null
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -51,20 +51,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
         private set
 
-    fun setAuto(v: Boolean) {
-        prefs.edit().putBoolean("auto", v).apply()
-        state = state.copy(auto = v)
-    }
-
+    fun setAuto(v: Boolean) { prefs.edit().putBoolean("auto", v).apply(); state = state.copy(auto = v) }
     fun consumeAuto() { state = state.copy(autoPending = false) }
-
     private var job: Job? = null
 
     fun detectRouter() {
         val ip = Gateway.gatewayIp(getApplication())
         state = state.copy(
             routerIp = ip ?: state.routerIp,
-            error = if (ip == null) "لم يتم العثور على الراوتر. اتصل بشبكة الواي فاي." else ""
+            error = if (ip == null) "لم يتم العثور على الراوتر تلقائياً، يرجى كتابة الـ IP يدوياً." else ""
         )
     }
 
@@ -73,27 +68,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(routerIp = clean, error = "")
     }
 
-    fun onUser(s: String) { state = state.copy(user = s) }
-    fun onPass(s: String) { state = state.copy(pass = s) }
-    fun goto(s: Screen) { state = state.copy(screen = s) }
-
-    fun back() {
-        state = when (state.screen) {
-            Screen.WEB -> state.copy(screen = Screen.ANALYSIS)
-            Screen.ANALYSIS -> { job?.cancel(); state.copy(screen = Screen.SETUP, running = false) }
-            else -> state
-        }
-    }
-
-    private fun validIp(ip: String): Boolean {
-        val parts = ip.split(".")
-        return parts.size == 4 && parts.all { it.isNotEmpty() && it.length <= 3 && it.toInt() in 0..255 }
-    }
-
     fun start(hasLocation: Boolean) {
         val ip = state.routerIp.trim()
-        if (!validIp(ip)) {
-            state = state.copy(error = "عنوان IP غير صحيح")
+        if (ip.isEmpty() || !ip.contains(".")) {
+            state = state.copy(error = "عنوان IP غير صحيح، يرجى كتابته يدوياً (مثال: 192.168.1.1)")
             return
         }
         prefs.edit().putString("ip", ip).apply()
@@ -136,19 +114,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
         val issues = mutableListOf<Issue>()
 
-        // 1. فحص الراوتر
         val router = step("router") {
             val r = Probe.probeRouter(ip, state.user, state.pass)
             r to (if (r.reachable) "${r.vendor} • ${r.note}" else r.note)
         }
         state = state.copy(router = router)
 
-        // اكتشاف ملف الراوتر تلقائياً بناءً على الشركة
         val vendorName = router?.vendor ?: ""
         val matchedProfile = knownRouters.firstOrNull { it.brand.contains(vendorName, ignoreCase = true) } ?: knownRouters.last()
         state = state.copy(profile = matchedProfile)
 
-        // 2. السرعة
         val speed = step("speed") {
             val down = SpeedTest.download()
             val up = SpeedTest.upload()
@@ -157,7 +132,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         state = state.copy(speed = speed)
 
-        // 3. DNS
         val currentDns = Gateway.currentDns(ctx)
         val dns = step("dns") {
             val rep = DnsBenchmark.run(currentDns) { done, total -> setStep("dns", Status.RUNNING, "$done / $total") }
@@ -165,21 +139,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         state = state.copy(dns = dns)
 
-        // 4. المنافذ
         val ports = step("ports") {
             val r = Probe.scanPorts(ip)
             r to (if (r.none { it.open }) "لا توجد منافذ مفتوحة" else "يوجد منافذ مفتوحة")
         }
         state = state.copy(ports = ports ?: emptyList())
 
-        // 5. Ping
         val pings = step("ping") {
             val list = listOf(Probe.pingGateway(ip, emptyList()), Probe.ping("Cloudflare", "1.1.1.1", 443), Probe.ping("Google", "8.8.8.8", 443))
             list to "متوسط ${fmt(list.drop(1).map { it.avg }.average(), 0)} ms"
         }
         state = state.copy(pings = pings ?: emptyList())
 
-        // 6. قنوات الواي فاي
         if (!hasLocation) {
             setStep("wifi", Status.SKIPPED, "يحتاج إذن الموقع")
         } else {
@@ -191,12 +162,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val baseline = if (speed != null && pings != null) MetricsTool.from(speed, pings, MetricsTool.systemDnsMs()) else null
-        state = state.copy(
-            issues = issues, running = false,
-            before = baseline, after = null, comparison = null
-        )
+        state = state.copy(issues = issues, running = false, before = baseline, after = null, comparison = null)
 
-        // الانتقال التلقائي للراوتر
         val d = state.dns
         val ok = router != null && router.reachable && router.authOk != false && d?.primary != null && d.secondary != null
         if (state.auto && ok) {
@@ -204,7 +171,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // دالة التأكد من اتصال الواي فاي (لمنع قياس 4G)
     private fun isConnectedToWifi(): Boolean {
         val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
@@ -218,27 +184,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = viewModelScope.launch {
             state = state.copy(retesting = true, comparison = null, after = null, error = "")
-            
-            // انتظار الاتصال بالواي فاي
             var attempts = 0
-            while (!isConnectedToWifi() && attempts < 15) {
-                delay(2000)
-                attempts++
-            }
-            
+            while (!isConnectedToWifi() && attempts < 15) { delay(2000); attempts++ }
             if (!isConnectedToWifi()) {
                 state = state.copy(retesting = false, error = "الرجاء التأكد من اتصال الهاتف بشبكة الواي فاي.")
                 return@launch
             }
-            
-            delay(3000) // استقرار الشبكة
-
+            delay(3000)
             val m = try { MetricsTool.collect() } catch (e: Exception) { null }
-            state = state.copy(
-                retesting = false, after = m,
-                comparison = if (m != null) MetricsTool.compare(b, m) else null,
-                error = if (m == null) "تعذر إعادة القياس." else ""
-            )
+            state = state.copy(retesting = false, after = m, comparison = if (m != null) MetricsTool.compare(b, m) else null)
         }
     }
 }
