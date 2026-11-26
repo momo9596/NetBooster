@@ -10,7 +10,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.coroutines.resume
 
-/** مكتبة JavaScript صغيرة تبحث عن العناصر بنصها الظاهر (وليس بأرقام ثابتة) داخل كل الإطارات. */
 private val NB_LIB = """
 var NB={
  docs:function(){var r=[];(function w(x){try{r.push(x.document);for(var i=0;i<x.frames.length;i++)w(x.frames[i]);}catch(e){}})(window);return r;},
@@ -55,24 +54,19 @@ var NB={
    if(ins[0].maxLength>0&&ins[0].maxLength<=3&&ins.length>=4){var o=ip.split('.');for(var k=0;k<4;k++)NB.setv(ins[k],o[k]);return 'ok';}
    NB.setv(ins[0],ip);return 'ok';
   }
+  // خطة بديلة (Fallback) لراوتر TP-Link
+  var target = /primary|preferred|dns server/i.test(re.source) && !/secondary/i.test(re.source) ? 'dnsserver1' : 'dnsserver2';
+  var inputs = document.querySelectorAll('input[name="'+target+'"], input[id="'+target+'"]');
+  if(inputs.length > 0){ NB.setv(inputs[0], ip); return 'ok'; }
   return 'nolabel';
- },
- checkManual:function(){
-  var ls=NB.labels(/^(use the following dns|use following dns|manual dns|use these dns)/i);
-  for(var i=0;i<ls.length;i++){
-   var l=ls[i],cb=null,d=l.ownerDocument;
-   if(l.htmlFor)cb=d.getElementById(l.htmlFor);
-   if(!cb)cb=l.querySelector('input[type=checkbox],input[type=radio]');
-   if(!cb&&l.parentElement){var q=l.parentElement.querySelectorAll('input[type=checkbox],input[type=radio]');if(q.length===1)cb=q[0];}
-   if(cb){if(!cb.checked)cb.click();return cb.checked?'set':'clicked';}
-  }
-  return 'none';
  },
  setChannel:function(n){
   n=String(n);
   function pick(s){var hit=[].slice.call(s.options).filter(function(o){return o.text.trim()===n||o.value===n;})[0];if(!hit)return false;s.value=hit.value;s.dispatchEvent(new Event('change',{bubbles:true}));return true;}
   var ls=NB.labels(/^channel:?$/i);
   for(var i=0;i<ls.length;i++){var ss=NB.following(ls[i],'select');if(ss.length&&pick(ss[0]))return 'set';}
+  var ss = document.querySelectorAll('select[name="channel"], select[id="channel"]');
+  if(ss.length > 0 && pick(ss[0])) return 'set';
   var r='notfound';
   NB.docs().forEach(function(d){[].slice.call(d.querySelectorAll('select')).forEach(function(s){var k=((s.id||'')+(s.name||'')).toLowerCase();if(r==='notfound'&&NB.vis(s)&&/chan/.test(k)&&!/width|bandwidth/.test(k)&&pick(s))r='set';});});
   return r;
@@ -90,66 +84,10 @@ var NB={
   }
   return 'nolabel';
  },
- readIp:function(re){
-  var ls=NB.labels(re);
-  for(var i=0;i<ls.length;i++){
-   var ins=NB.textIns(ls[i]);
-   if(!ins.length)continue;
-   if(ins[0].maxLength>0&&ins[0].maxLength<=3&&ins.length>=4)return ins.slice(0,4).map(function(x){return x.value;}).join('.');
-   return ins[0].value;
-  }
-  return '';
- },
- wins:function(){var r=[];(function w(x,p){try{r.push({w:x,d:x.document,path:p});for(var i=0;i<x.frames.length;i++)w(x.frames[i],p+'/'+i);}catch(e){}})(window,'top');return r;},
- content:function(){
-  var best=null;
-  NB.wins().forEach(function(o){
-   if(o.w===window)return;
-   var u='';try{u=o.w.location.pathname.split('/').pop();}catch(e){}
-   if(/^(menu|top|banner|bottom)/i.test(u))return;
-   if(o.w.name==='mainFrame')best=o;
-   else if(!best&&/rpm\.htm/i.test(u))best=o;
-  });
-  return best?best.w:null;
- },
- go:function(page){var c=NB.content();if(!c)return 'nocontent';try{c.location.href=page;return 'go';}catch(e){return 'err';}},
- dnsIn:function(){
-  var r=[];
-  NB.docs().forEach(function(d){[].slice.call(d.querySelectorAll('input')).forEach(function(i){
-   var t=(i.type||'text').toLowerCase(),k=((i.name||'')+(i.id||'')).toLowerCase();
-   if(/dns/.test(k)&&(t==='text'||t==='tel'||t==='')&&NB.vis(i))r.push(i);
-  });});
-  return r;
- },
- fillDnsByName:function(a,b){
-  var l=NB.dnsIn();
-  if(!l.length)return 'none';
-  if(l[0].disabled)return 'disabled';
-  var small=l.filter(function(i){return i.maxLength>0&&i.maxLength<=3;});
-  if(small.length>=8){var A=a.split('.'),B=b.split('.');for(var q=0;q<4;q++){NB.setv(small[q],A[q]);NB.setv(small[4+q],B[q]);}return 'ok';}
-  var p=null,s=null;
-  l.forEach(function(i){var k=((i.name||'')+(i.id||'')).toLowerCase();if(!s&&/(2|sec|alt)/.test(k))s=i;else if(!p)p=i;});
-  if(!p)p=l[0];
-  NB.setv(p,a);
-  if(s){NB.setv(s,b);return 'ok';}
-  return 'one';
- },
- dnsVals:function(){return NB.dnsIn().map(function(i){return i.value;}).join('|');},
- diag:function(){
-  return NB.wins().map(function(o){
-   var u='';try{u=o.w.location.pathname.split('/').pop();}catch(e){}
-   var ins=[].slice.call(o.d.querySelectorAll('input,select')).slice(0,12).map(function(i){return i.name||i.id||i.type;}).join(',');
-   return o.path+' '+u+' ['+ins+']';
-  }).join(' ## ');
- },
  page:function(){var t=NB.docs().map(function(d){return d.body?d.body.innerText:'';}).join('\n');return t.length>30000?t.slice(0,30000):t;}
 };
 """.trimIndent()
 
-/**
- * يطبق التغييرات داخل صفحة الراوتر عبر WebView بالبحث عن العناصر بنصوصها (Wireless, WAN, Save, Reboot...).
- * مصمم بحيث يتوقف بأمان لو لم يجد العناصر المتوقعة (لا يضغط حفظ إلا بعد تعبئة الحقول بنجاح).
- */
 class AutoApply(
     private val web: WebView,
     private val routerIp: String,
@@ -189,9 +127,7 @@ class AutoApply(
     private suspend fun tcpOk(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         try {
             Socket().use { it.connect(InetSocketAddress(host, port), 1500); true }
-        } catch (_: Exception) {
-            false
-        }
+        } catch (_: Exception) { false }
     }
 
     private suspend fun waitState(host: String, port: Int, up: Boolean, timeoutMs: Long): Boolean {
@@ -203,65 +139,40 @@ class AutoApply(
         return false
     }
 
-    private suspend fun dhcpFieldsReady(): Boolean =
-        until("NB.dnsIn().length>0?'y':'n'", 8, 600) { it == "y" } == "y"
-
-    /** يفتح صفحة DHCP Settings: أولاً برابط مباشر داخل الإطار الرئيسي (أضمن)، ثم بالضغط على القائمة. */
-    private suspend fun openDhcpPage(): Boolean {
-        val g = js("NB.go('LanDhcpServerRpm.htm')")
-        if (g == "go") {
-            delay(1800)
-            if (dhcpFieldsReady()) return true
-        }
-        if (click(listOf("dhcp"), "left", tries = 4)) {
-            delay(1000)
-            if (click(listOf("dhcp settings"), "left", tries = 4)) {
-                delay(1800)
-                if (dhcpFieldsReady()) return true
-            }
-        }
-        return false
-    }
-
-    /** يضبط DNS في صفحة DHCP (الأسهل والأضمن لأن الراوتر يوزعه على كل الأجهزة). */
     private suspend fun setDnsOnDhcp(): Boolean {
-        if (!openDhcpPage()) {
-            log("⚠ لم أتمكن من فتح صفحة DHCP Settings")
-            log("تشخيص: " + js("NB.diag()"))
+        // محاولة الدخول من القائمة
+        val nav = click(listOf("dhcp"), "left", tries = 4) && run {
+            delay(900)
+            click(listOf("dhcp settings"), "left", tries = 4)
+        }
+        // إذا فشل الدخول من القائمة، ندخل بالرابط المباشر لراوتر TP-Link
+        if (!nav) {
+            log("ℹ الانتقال المباشر إلى إعدادات DHCP...")
+            withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/LanDhcpServerRpm.htm") }
+            delay(2500)
+        }
+        delay(1500)
+        
+        // تحديث خوارزمية البحث عن DNS
+        val a = until("NB.fillIp(/^(primary|preferred|dns server)/i,'$dnsP')", 10) { it == "ok" }
+        if (a != "ok") {
+            log("ℹ لم أجد حقول DNS في صفحة DHCP")
             return false
         }
-        var r = js("NB.fillDnsByName('$dnsP','$dnsS')")
-        if (r == "none") {
-            // احتياط: البحث بنص العنوان بدل اسم الحقل
-            val a = js("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')")
-            val b = js("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')")
-            r = if (a == "ok" && b == "ok") "ok" else if (a == "ok") "one" else "none"
-        }
-        if (r == "disabled") {
-            log("⚠ حقول DNS معطلة: خدمة DHCP Server مغلقة في الراوتر")
-            return false
-        }
-        if (r == "none") {
-            log("⚠ لم أجد حقول DNS في صفحة DHCP")
-            log("تشخيص: " + js("NB.diag()"))
-            return false
-        }
-        if (r == "one") log("⚠ تم ملء الـ DNS الأساسي فقط")
-        delay(500)
-        val filled = js("NB.dnsVals()")
-        if (!filled.contains(dnsP)) {
-            log("⚠ الحقول لم تقبل القيمة (قرأت: $filled)")
-            return false
-        }
+        val b = until("NB.fillIp(/^(secondary|alternate|secondary dns server)/i,'$dnsS')", 4) { it == "ok" }
+        if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
+        
         if (!click(listOf("save"), "last", tries = 6)) {
-            log("⚠ لم أجد زر Save في صفحة DHCP")
+            log("⚠ لم أجد زر الحفظ في صفحة DHCP")
             return false
         }
         delay(3500)
-        // إعادة فتح الصفحة وقراءة القيمة المحفوظة فعلاً
-        val v = if (openDhcpPage()) js("NB.dnsVals()") else ""
-        if (v.contains(dnsP)) log("✔ تم حفظ DNS في DHCP وتأكيده: $v")
-        else log("⚠ تم الضغط على Save لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
+        click(listOf("dhcp settings"), "left", tries = 3)
+        delay(1500)
+        
+        val v = until("NB.readIp(/^(primary|preferred|dns server)/i)", 6) { it.isNotEmpty() }
+        if (v == dnsP) log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP")
+        else log("⚠ تم الحفظ لكن لم أتمكن من تأكيد القيمة (قرأت: $v)")
         return true
     }
 
@@ -269,7 +180,7 @@ class AutoApply(
         log("التحقق من تسجيل الدخول...")
         val inn = until("NB.find('logout','left')?'yes':'no'", 45, 800) { it == "yes" }
         if (inn != "yes") {
-            log("❌ لم تظهر صفحة الراوتر بعد تسجيل الدخول. تأكد من اسم المستخدم وكلمة المرور ثم أعد المحاولة.")
+            log("❌ لم تظهر صفحة الراوتر بعد تسجيل الدخول. تأكد من اسم المستخدم وكلمة المرور.")
             return false
         }
 
@@ -283,59 +194,38 @@ class AutoApply(
                 delay(900)
                 click(listOf("basic settings", "wireless settings"), "left")
             }
+            // إذا فشل الدخول من القائمة، ندخل بالرابط المباشر
             if (!nav) {
-                log("⚠ لم أجد صفحة إعدادات الواي فاي، تم تخطي القناة.")
+                log("ℹ الانتقال المباشر إلى إعدادات الواي فاي...")
+                withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/WlanBasicRpm.htm") }
+                delay(2500)
+            }
+            delay(1200)
+            val r = until("NB.setChannel($channel)", 12, 700) { it == "set" }
+            if (r == "set") {
+                val m = js("NB.setSel('mode','11bgn')")
+                if (m == "set") log("✔ وضع الواي فاي: 11bgn")
+                val w = js("NB.setSel('channel width', '" + (if (cleanAir) "auto" else "^20") + "')")
+                if (w == "set") log("✔ عرض القناة: " + (if (cleanAir) "Auto 20/40MHz" else "20MHz"))
+                delay(500)
+            }
+            if (r == "set" && click(listOf("save"), "last")) {
+                delay(4000)
+                channelSaved = true
+                log("✔ تم حفظ القناة $channel")
             } else {
-                delay(1200)
-                val r = until("NB.setChannel($channel)", 12, 700) { it == "set" }
-                if (r == "set") {
-                    // تحسينات الأداء في نفس الصفحة: وضع الواي فاي (b/g/n) وعرض القناة
-                    // 40MHz (أسرع) فقط لو الجو نظيف، وإلا 20MHz لأن 40 يزيد التداخل في الأماكن المزدحمة
-                    val m = js("NB.setSel('mode','11bgn')")
-                    if (m == "set") log("✔ وضع الواي فاي: 11bgn")
-                    val w = js("NB.setSel('channel width', '" + (if (cleanAir) "auto" else "^20") + "')")
-                    if (w == "set") log("✔ عرض القناة: " + (if (cleanAir) "Auto 20/40MHz (الجو نظيف)" else "20MHz (لتقليل التداخل)"))
-                    delay(500)
-                }
-                if (r == "set" && click(listOf("save"), "last")) {
-                    delay(4000)
-                    channelSaved = true
-                    log("✔ تم حفظ القناة $channel")
-                    // قوة الإرسال العالية (صفحة Wireless Advanced) - اختيارية، تُتخطى لو غير موجودة
-                    if (click(listOf("wireless"), "left", tries = 3)) {
-                        delay(900)
-                        if (click(listOf("wireless advanced", "advanced"), "left", tries = 3)) {
-                            delay(1200)
-                            val t = until("NB.setSel('transmit power','high')", 4) { it == "set" || it == "already" }
-                            if (t == "set" && click(listOf("save"), "last", tries = 3)) {
-                                delay(3000)
-                                log("✔ قوة الإرسال: High")
-                            } else if (t != "already") log("ℹ تم تخطي قوة الإرسال (غير متاحة في هذا الموديل)")
-                        }
-                    }
-                } else {
-                    log("⚠ لم أجد قائمة القناة، تم تخطي القناة (لم يتم تغيير شيء).")
-                }
+                log("⚠ لم أجد قائمة القناة، تم تخطي القناة.")
             }
         }
 
         // ---------- DNS ----------
-        log("ضبط DNS من صفحة DHCP: $dnsP / $dnsS ...")
+        log("ضبط DNS: $dnsP / $dnsS ...")
         dnsSaved = setDnsOnDhcp()
 
         if (!channelSaved && !dnsSaved) {
             log("❌ لم يتم تطبيق أي تغيير، لذلك لن يتم إعادة تشغيل الراوتر.")
             return false
         }
-
-        // ---------- التحقق من صفحة Status ----------
-        log("التحقق من الإعدادات الجديدة...")
-        click(listOf("status"), "left", tries = 6)
-        val chRegex = channel?.let { Regex("Channel:\\s*$it\\b") }
-        val page = until("NB.page()", 12, 4000) { p ->
-            (!channelSaved || chRegex == null || chRegex.containsMatchIn(p))
-        }
-        if (channelSaved && chRegex != null) log(if (chRegex.containsMatchIn(page)) "✔ تأكيد القناة: $channel" else "⚠ لم أتمكن من تأكيد القناة من صفحة الحالة")
 
         // ---------- إعادة التشغيل ----------
         log("إعادة تشغيل الراوتر...")
@@ -344,8 +234,9 @@ class AutoApply(
             click(listOf("reboot"), "left")
         }
         if (!navRb) {
-            log("⚠ لم أجد صفحة Reboot. أعد تشغيل الراوتر يدوياً.")
-            return true
+            log("ℹ الانتقال المباشر لصفحة إعادة التشغيل...")
+            withContext(Dispatchers.Main) { web.loadUrl("http://$routerIp/SysRebootRpm.htm") }
+            delay(2500)
         }
         delay(1200)
         if (!click(listOf("reboot"), "last", tries = 6)) {
@@ -353,10 +244,10 @@ class AutoApply(
             return true
         }
         delay(3000)
-        log("⏳ بانتظار إغلاق الراوتر ثم عودته (قد تستغرق دقيقة أو أكثر)...")
+        log("⏳ بانتظار إغلاق الراوتر ثم عودته (قد تستغرق دقيقة)...")
         waitState(routerIp, 80, up = false, timeoutMs = 40_000)
         if (!waitState(routerIp, 80, up = true, timeoutMs = 240_000)) {
-            log("⚠ الراوتر لم يعد في الوقت المتوقع. تأكد من اتصالك بالواي فاي.")
+            log("⚠ الراوتر لم يعد في الوقت المتوقع.")
             return true
         }
         log("الراوتر عاد للعمل، بانتظار الإنترنت...")
