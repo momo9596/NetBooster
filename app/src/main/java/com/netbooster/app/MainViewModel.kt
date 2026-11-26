@@ -40,9 +40,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var state by mutableStateOf(
         UiState(
             routerIp = Gateway.gatewayIp(app) ?: prefs.getString("ip", "") ?: "",
-            user = prefs.getString("user", "admin") ?: "admin",
-            pass = prefs.getString("pass", "admin") ?: "admin",
-            auto = prefs.getBoolean("auto", true)
+            user = "admin", // فرض اسم المستخدم admin
+            pass = "admin", // فرض كلمة المرور admin
+            auto = true
         )
     )
         private set
@@ -89,7 +89,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun start(hasLocation: Boolean) {
         val ip = state.routerIp.trim()
         if (!validIp(ip)) {
-            state = state.copy(error = "عنوان IP غير صحيح، مثال: 192.168.1.1")
+            state = state.copy(error = "عنوان IP غير صحيح، تأكد من اتصالك بالواي فاي")
             return
         }
         prefs.edit().putString("ip", ip).putString("user", state.user).putString("pass", state.pass).apply()
@@ -140,7 +140,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (router != null) {
             if (!router.reachable) issues.add(Issue(2, "تعذر الوصول إلى الراوتر على ${ltr(ip)}"))
             if (router.authOk == false) issues.add(Issue(2, "اسم المستخدم أو كلمة المرور غير صحيحة"))
-            if (router.defaultCreds) issues.add(Issue(1, "الراوتر يستخدم بيانات دخول افتراضية، غيّرها لحماية شبكتك من الاختراق"))
         }
 
         val speed = step("speed") {
@@ -150,10 +149,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             SpeedResult(down, up, pg) to "تحميل ${fmt(down, 1)} • رفع ${fmt(up, 1)} Mbps"
         }
         state = state.copy(speed = speed)
-        if (speed != null) {
-            if (speed.downMbps < 5) issues.add(Issue(2, "سرعة التحميل ضعيفة جداً (${fmt(speed.downMbps, 1)} Mbps)"))
-            else if (speed.downMbps < 15) issues.add(Issue(1, "سرعة التحميل منخفضة (${fmt(speed.downMbps, 1)} Mbps)"))
-        }
 
         val currentDns = Gateway.currentDns(ctx)
         val dns = step("dns") {
@@ -164,15 +159,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             rep to (if (p != null) "الأفضل: ${p.name} (${fmt(p.medianMs, 0)} ms)" else "لم يستجب أي سيرفر")
         }
         state = state.copy(dns = dns)
-        if (dns != null) {
-            val best = dns.primary
-            val cur = dns.currentMedian
-            if (dns.current.isNotEmpty() && cur == null) {
-                issues.add(Issue(2, "الـ DNS الحالي لا يستجيب بشكل صحيح"))
-            } else if (best != null && cur != null && cur > best.medianMs * 1.3 && cur - best.medianMs > 10) {
-                issues.add(Issue(1, "الـ DNS الحالي أبطأ بحوالي ${fmt(cur - best.medianMs, 0)} ms من الأفضل (${best.name})"))
-            }
-        }
 
         val ports = step("ports") {
             val r = Probe.scanPorts(ip)
@@ -180,9 +166,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             r to (if (open.isEmpty()) "لا توجد منافذ مفتوحة" else "مفتوح: " + open.joinToString(" ") { it.port.toString() })
         }
         state = state.copy(ports = ports ?: emptyList())
-        ports?.filter { it.open && it.risky }?.forEach {
-            issues.add(Issue(2, "المنفذ ${it.port} (${it.service}) مفتوح وهو خطر أمني، يفضل إغلاقه من إعدادات الراوتر"))
-        }
 
         val pings = step("ping") {
             val openPorts = ports?.filter { it.open }?.map { it.port } ?: emptyList()
@@ -191,46 +174,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 Probe.ping("Cloudflare 1.1.1.1", "1.1.1.1", 443),
                 Probe.ping("Google 8.8.8.8", "8.8.8.8", 443)
             )
-            val net = list.drop(1).filter { it.lossPct < 100 }
-            list to (if (net.isEmpty()) "لا يوجد اتصال بالإنترنت" else "متوسط ${fmt(net.map { it.avg }.average(), 0)} ms")
+            list to "متوسط ${fmt(list.drop(1).map { it.avg }.average(), 0)} ms"
         }
         state = state.copy(pings = pings ?: emptyList())
-        pings?.forEach { p ->
-            if (p.lossPct >= 100) issues.add(Issue(2, "لا توجد استجابة من ${p.target}"))
-            else {
-                if (p.lossPct >= 10) issues.add(Issue(2, "فقدان حزم ${p.lossPct}% مع ${p.target}"))
-                else if (p.lossPct >= 3) issues.add(Issue(1, "فقدان حزم ${p.lossPct}% مع ${p.target}"))
-                if (p.jitter > 30) issues.add(Issue(1, "تذبذب عالٍ في الاستجابة مع ${p.target} (${fmt(p.jitter, 0)} ms)"))
-            }
-        }
-        pings?.firstOrNull { it.target == "الراوتر" }?.let { g ->
-            if (g.lossPct < 100 && g.avg > 15) issues.add(Issue(1, "الاتصال بالراوتر بطيء (${fmt(g.avg, 0)} ms)، الإشارة ضعيفة أو الشبكة مزدحمة"))
-        }
-        pings?.filter { it.target != "الراوتر" && it.lossPct < 100 }?.forEach {
-            if (it.avg > 120) issues.add(Issue(1, "زمن الاستجابة مرتفع مع ${it.target} (${fmt(it.avg, 0)} ms)"))
-        }
 
         if (!hasLocation) {
             setStep("wifi", Status.SKIPPED, "يحتاج إذن الموقع لقراءة الشبكات القريبة")
         } else {
             val ch = step("wifi") {
-                val r = WifiChannels.scan(ctx) ?: throw IllegalStateException("تعذر الفحص: فعّل الموقع (GPS) وأعد المحاولة")
+                val r = WifiChannels.scan(ctx) ?: throw IllegalStateException("تعذر الفحص")
                 r to "أفضل قناة: ${r.best}"
             }
             state = state.copy(channels = ch)
-            if (ch != null) {
-                val own = ch.ownChannel
-                val ownScore = ch.scores.firstOrNull { it.channel == own }?.congestion
-                val bestScore = ch.scores.first { it.channel == ch.best }.congestion
-                if (own != null && own != ch.best && ownScore != null && ownScore > bestScore + 0.3) {
-                    issues.add(Issue(1, "قناة الراوتر الحالية $own مزدحمة. غيّرها إلى القناة ${ch.best}"))
-                }
-                val rssi = ch.ownRssi
-                if (rssi != null && rssi < -75) issues.add(Issue(1, "إشارة الواي فاي ضعيفة ($rssi dBm)، قرّب من الراوتر"))
-            }
         }
 
-        if (issues.isEmpty()) issues.add(Issue(0, "لم يتم اكتشاف مشاكل واضحة في الشبكة"))
+        if (issues.isEmpty()) issues.add(Issue(0, "لم يتم اكتشاف مشاكل واضحة، لكن التطبيق سيطبق أفضل الإعدادات لزيادة الاستقرار"))
 
         val baseline = if (speed != null && pings != null) MetricsTool.from(speed, pings, MetricsTool.systemDnsMs()) else null
         state = state.copy(
@@ -238,13 +196,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             before = baseline, after = null, comparison = null
         )
 
+        // التوجه التلقائي المباشر لصفحة الراوتر إذا كان يعمل
         val d = state.dns
-        val ok = router != null && router.reachable && router.authOk != false &&
-                d?.primary != null && d.secondary != null
+        val ok = router != null && router.reachable && router.authOk != false && d?.primary != null && d.secondary != null
         if (state.auto && ok) {
             state = state.copy(autoPending = true, screen = Screen.WEB)
-        } else if (state.auto && !ok) {
-            state = state.copy(error = "لم يتم التطبيق التلقائي: تحقق من الراوتر وبيانات الدخول ونتائج DNS ثم أعد المحاولة")
         }
     }
 
