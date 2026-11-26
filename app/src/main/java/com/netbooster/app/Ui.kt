@@ -347,6 +347,7 @@ private fun WebScreen(vm: MainViewModel) {
     val clipboard = LocalClipboardManager.current
     var web by remember { mutableStateOf<WebView?>(null) }
     var confirm by remember { mutableStateOf(false) }
+    var tools by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val busyFlag = remember { booleanArrayOf(false) }
     val logs = remember { mutableStateListOf<String>() }
@@ -419,18 +420,21 @@ private fun WebScreen(vm: MainViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(
-                onClick = { confirm = true },
-                enabled = !busy && p.isNotEmpty() && sec.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (busy) "جاري التطبيق..." else "تطبيق التغييرات تلقائياً + إعادة التشغيل") }
-            logs.takeLast(6).forEach { Text(it, fontSize = 12.sp, color = Muted) }
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { confirm = true },
+                    enabled = !busy && p.isNotEmpty() && sec.isNotEmpty(),
+                    modifier = Modifier.weight(1f)
+                ) { Text(if (busy) "جاري التطبيق..." else "تطبيق تلقائي + إعادة التشغيل", fontSize = 13.sp) }
+                OutlinedButton(onClick = { tools = !tools }) { Text(if (tools) "إخفاء" else "أدوات", fontSize = 12.sp) }
+            }
+            logs.takeLast(3).forEach { Text(it, fontSize = 11.sp, color = Muted, maxLines = 2) }
             Text(
-                "DNS المقترح: Primary ${ltr(p)}  |  Secondary ${ltr(sec)}",
-                fontWeight = FontWeight.Bold, color = Good, fontSize = 14.sp
+                "DNS: ${ltr(p)}  |  ${ltr(sec)}" + (if (bestCh != null) "   • قناة $bestCh" else ""),
+                fontWeight = FontWeight.Bold, color = Good, fontSize = 12.sp
             )
-            s.channels?.let { Text("أفضل قناة واي فاي: ${it.best}", color = Good, fontSize = 14.sp) }
+            if (tools) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedButton(onClick = { clipboard.setText(AnnotatedString(p)) }, modifier = Modifier.weight(1f)) {
                     Text("نسخ Primary", fontSize = 12.sp)
@@ -446,7 +450,7 @@ private fun WebScreen(vm: MainViewModel) {
                             val msg = when (r?.trim('"')) {
                                 "ok", "octets" -> "تمت تعبئة DNS، اضغط حفظ/Apply في صفحة الراوتر"
                                 "one" -> "تمت تعبئة حقل واحد فقط، أكمل الثاني يدوياً ثم احفظ"
-                                else -> "لم أجد حقول DNS. افتح قسم DHCP في الراوتر ثم اضغط مرة أخرى"
+                                else -> "لم أجد حقول DNS. افتح صفحة إعدادات الإنترنت/WAN/DHCP واختر DNS يدوي ثم اضغط مرة أخرى"
                             }
                             Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                         }
@@ -472,6 +476,7 @@ private fun WebScreen(vm: MainViewModel) {
                 },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("نسخ هيكل الصفحة الحالية (للتطوير)", fontSize = 12.sp) }
+            }
         }
 
         AndroidView(
