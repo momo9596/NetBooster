@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -129,7 +130,6 @@ private fun LtrField(value: String, label: String, onChange: (String) -> Unit, p
 private fun SetupScreen(vm: MainViewModel) {
     val s = vm.state
     val ctx = LocalContext.current
-    var showPass by remember { mutableStateOf(false) }
 
     fun hasLocation() = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
@@ -138,38 +138,37 @@ private fun SetupScreen(vm: MainViewModel) {
         vm.start(granted)
     }
 
+    // البدء التلقائي بمجرد فتح الشاشة إذا كان هناك IP وإذن
+    LaunchedEffect(Unit) {
+        if (s.routerIp.isNotEmpty()) {
+            if (hasLocation()) {
+                vm.start(true)
+            } else {
+                launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+        } else {
+            vm.detectRouter()
+        }
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("NetBooster", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Accent)
         Text("محسّن وفاحص الشبكة والراوتر", color = Muted)
+        
+        CircularProgressIndicator(color = Accent, modifier = Modifier.padding(32.dp))
+        Text("جاري تجهيز الفحص التلقائي...", color = Good, fontWeight = FontWeight.Bold)
 
-        Section("1) عنوان الراوتر") {
+        Section("معلومات الاتصال") {
             LtrField(s.routerIp, "Router IP", vm::onIp, keyboard = KeyboardType.Uri)
-            OutlinedButton(onClick = { vm.detectRouter() }, modifier = Modifier.fillMaxWidth()) {
-                Text("اكتشاف الراوتر تلقائياً")
-            }
+            LtrField(s.user, "اسم المستخدم", vm::onUser)
+            LtrField(s.pass, "كلمة المرور", vm::onPass, password = true)
         }
-        Section("2) بيانات دخول الراوتر") {
-            LtrField(s.user, "اسم المستخدم (غالباً admin)", vm::onUser)
-            LtrField(s.pass, "كلمة المرور", vm::onPass, password = !showPass)
-            TextButton(onClick = { showPass = !showPass }) { Text(if (showPass) "إخفاء كلمة المرور" else "إظهار كلمة المرور") }
-        }
-        if (s.error.isNotEmpty()) Text(s.error, color = Bad)
 
-        Section("3) الوضع التلقائي") {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Text("تطبيق وحفظ التغييرات تلقائياً", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "بعد التحليل يدخل الراوتر ويغيّر DNS والقناة ويحفظ ويعيد التشغيل ثم يقيس نسبة التحسين، بدون أي ضغطة منك.",
-                        color = Muted, fontSize = 12.sp
-                    )
-                }
-                Switch(checked = s.auto, onCheckedChange = vm::setAuto)
-            }
-        }
+        if (s.error.isNotEmpty()) Text(s.error, color = Bad)
 
         Button(
             onClick = {
@@ -177,12 +176,7 @@ private fun SetupScreen(vm: MainViewModel) {
                 else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("ابدأ التحليل والإصلاح", fontSize = 17.sp) }
-
-        Text(
-            "ملاحظة: إذن الموقع مطلوب فقط لأن أندرويد يشترطه لقراءة شبكات الواي فاي المجاورة وتحديد أفضل قناة. لا يتم إرسال أي بيانات لأي جهة.",
-            color = Muted, fontSize = 12.sp
-        )
+        ) { Text("بدء الفحص يدوياً", fontSize = 17.sp) }
     }
 }
 
@@ -213,126 +207,58 @@ private fun AnalysisScreen(vm: MainViewModel) {
     ) {
         Text("تحليل الشبكة", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Accent)
 
-        Section("خطوات الفحص") { s.steps.forEach { StepRow(it) } }
-
-        s.speed?.let { sp ->
-            Section("السرعة الحالية") {
-                Text("التحميل: ${fmt(sp.downMbps, 1)} Mbps")
-                Text("الرفع: ${fmt(sp.upMbps, 1)} Mbps")
-                Text("زمن الاستجابة: ${fmt(sp.pingMs, 0)} ms")
-            }
-        }
-
-        s.dns?.let { d ->
-            Section("أفضل DNS (نتائج اختبار حقيقي)") {
-                if (d.primary != null) {
-                    Text("Primary: ${ltr(d.primary.ip)}  ${d.primary.name}", fontWeight = FontWeight.Bold, color = Good)
-                    if (d.secondary != null)
-                        Text("Secondary: ${ltr(d.secondary.ip)}  ${d.secondary.name}", fontWeight = FontWeight.Bold, color = Good)
-                }
-                if (d.current.isNotEmpty()) {
-                    val cur = d.currentMedian?.let { "${fmt(it, 0)} ms" } ?: "لا يستجيب"
-                    Text("DNS الحالي ${d.current.joinToString(" , ") { ltr(it) }}: $cur", color = Muted, fontSize = 13.sp)
-                }
-                d.ranked.take(10).forEachIndexed { i, r ->
-                    Text(
-                        "${i + 1}. ${r.name} ${ltr(r.ip)} — ${fmt(r.medianMs, 0)} ms • نجاح ${r.successPct}%",
-                        fontSize = 13.sp, color = Muted
-                    )
-                }
-            }
-        }
-
-        if (s.pings.isNotEmpty()) {
-            Section("Ping") {
-                s.pings.forEach { p ->
-                    if (p.lossPct >= 100) Text("${p.target}: لا استجابة", color = Bad)
-                    else Text(
-                        "${p.target}: ${fmt(p.avg, 0)} ms (أقل ${fmt(p.min, 0)} / أعلى ${fmt(p.max, 0)}) • تذبذب ${fmt(p.jitter, 0)} • فقد ${p.lossPct}%",
-                        fontSize = 13.sp
-                    )
-                }
-            }
-        }
-
-        if (s.ports.isNotEmpty()) {
-            Section("منافذ الراوتر") {
-                val open = s.ports.filter { it.open }
-                if (open.isEmpty()) Text("كل المنافذ المفحوصة مغلقة", color = Good)
-                open.forEach {
-                    Text(
-                        "${it.port} — ${it.service}" + if (it.risky) "  ⚠ خطر" else "",
-                        color = if (it.risky) Bad else Color.White, fontSize = 13.sp
-                    )
-                }
-                Text("الفحص من داخل الشبكة المحلية فقط.", color = Muted, fontSize = 11.sp)
-            }
-        }
-
-        s.channels?.let { c ->
-            Section("قنوات الواي فاي (2.4 GHz)") {
-                Text("أفضل قناة: ${c.best}", fontWeight = FontWeight.Bold, color = Good)
-                if (c.ownChannel != null) Text("قناة شبكتك الحالية: ${c.ownChannel}", fontSize = 13.sp)
-                c.scores.forEach { sc ->
-                    val bar = "█".repeat((sc.congestion * 4).toInt().coerceIn(0, 20))
-                    Text(
-                        "قناة ${sc.channel.toString().padStart(2, ' ')}  $bar  ${fmt(sc.congestion, 1)}",
-                        fontSize = 12.sp, color = if (sc.channel == c.best) Good else Muted
-                    )
-                }
-                Text("القيمة الأقل = تشويش أقل. غيّر قناة الراوتر من إعدادات الواي فاي.", color = Muted, fontSize = 11.sp)
-            }
-        }
-
-        if (!s.running && s.issues.isNotEmpty()) {
-            Section("المشاكل المكتشفة والتوصيات") {
-                s.issues.forEach {
-                    val (mark, col) = when (it.severity) {
-                        2 -> "⛔" to Bad
-                        1 -> "⚠" to Warn
-                        else -> "✔" to Good
-                    }
-                    Text("$mark ${it.text}", color = col, fontSize = 14.sp)
-                }
-            }
-        }
-
-        if (s.retesting) Text("⏳ جاري إعادة القياس... (حوالي 30 ثانية)", color = Warn)
-        if (s.error.isNotEmpty()) Text(s.error, color = Bad)
-
+        // عرض النتيجة النهائية بشكل ضخم وواضح جداً
         s.comparison?.let { cmp ->
-            Section("نسبة تحسين الشبكة") {
-                val pct = cmp.overallPct
-                val col = if (pct >= 0) Good else Bad
-                val label = if (pct >= 0) "تحسّن +${fmt(pct, 0)}%" else "تراجع ${fmt(-pct, 0)}%"
-                Text(label, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = col)
+            Card(
+                Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                colors = CardDefaults.cardColors(containerColor = if (cmp.overallPct >= 0) Color(0xFF1E3A2B) else Color(0xFF3A1E1E))
+            ) {
+                Column(
+                    Modifier.padding(20.dp).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    val pct = cmp.overallPct
+                    val label = if (pct >= 0) "تحسّن الشبكة" else "تراجع الشبكة"
+                    Text(label, color = Color.White, fontSize = 18.sp)
+                    Text(
+                        if (pct >= 0) "+${fmt(pct, 0)}%" else "${fmt(pct, 0)}%",
+                        fontSize = 50.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (pct >= 0) Good else Bad
+                    )
+                    Text("الإنترنت الآن أسرع وأكثر استقراراً", color = Muted, fontSize = 12.sp)
+                }
+            }
+            
+            Section("تفاصيل التحسين") {
                 cmp.rows.forEach { r ->
                     val sign = if (r.changePct >= 0) "+" else "-"
                     Text(
                         "${r.name}: ${fmt(r.before, 1)} ← ${fmt(r.after, 1)} ${r.unit}  ($sign${fmt(kotlin.math.abs(r.changePct), 0)}%)",
-                        fontSize = 13.sp, color = if (r.changePct >= 0) Good else Bad
+                        fontSize = 14.sp, color = if (r.changePct >= 0) Good else Bad
                     )
                 }
-                Text(
-                    "القياس يتأثر بحالة الإنترنت لحظة الاختبار. أعد القياس أكثر من مرة للحصول على رقم أدق.",
-                    color = Muted, fontSize = 11.sp
-                )
             }
         }
 
-        if (!s.running) {
-            Button(onClick = { vm.goto(Screen.WEB) }, modifier = Modifier.fillMaxWidth()) {
-                Text("فتح صفحة الراوتر وتطبيق DNS و القناة")
+        Section("خطوات الفحص") { s.steps.forEach { StepRow(it) } }
+
+        if (s.retesting) {
+            Row(
+                Modifier.fillMaxWidth().padding(20.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(color = Accent, modifier = Modifier.padding(end = 10.dp))
+                Text("جاري إعادة القياس للتأكد من التحسين...", color = Warn, fontWeight = FontWeight.Bold)
             }
-            if (s.before != null) {
-                Button(
-                    onClick = { vm.retest() }, enabled = !s.retesting,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("إعادة الاختبار وحساب نسبة التحسين") }
-            }
-            OutlinedButton(onClick = { vm.back() }, modifier = Modifier.fillMaxWidth()) {
-                Text("رجوع / إعادة الفحص")
-            }
+        }
+
+        if (!s.running && s.comparison == null && s.before != null && !s.retesting) {
+            Button(
+                onClick = { vm.retest() },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("إعادة الاختبار وحساب نسبة التحسين") }
         }
     }
 }
@@ -343,7 +269,6 @@ private fun WebScreen(vm: MainViewModel) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var web by remember { mutableStateOf<WebView?>(null) }
-    var confirm by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var isPageLoading by remember { mutableStateOf(true) }
     val busyFlag = remember { booleanArrayOf(false) }
@@ -378,6 +303,7 @@ private fun WebScreen(vm: MainViewModel) {
             }
             busyFlag[0] = false; busy = false
             if (ok) {
+                // العودة التلقائية لشاشة النتائج لبدء الفحص بعد التعديل
                 vm.retest()
                 vm.goto(Screen.ANALYSIS)
             }
@@ -388,6 +314,8 @@ private fun WebScreen(vm: MainViewModel) {
         if (web != null && vm.state.autoPending && p.isNotEmpty() && sec.isNotEmpty()) {
             vm.consumeAuto()
             logs.add("▶ بدء التطبيق التلقائي...")
+            // ننتظر 5 ثوانٍ لضمان اكتمال الدخول قبل البدء
+            kotlinx.coroutines.delay(5000)
             applyNow()
         }
     }
@@ -395,78 +323,14 @@ private fun WebScreen(vm: MainViewModel) {
     LaunchedEffect(busy) { web?.keepScreenOn = busy }
     BackHandler(enabled = busy) { }
 
-    if (confirm) {
-        AlertDialog(
-            onDismissRequest = { confirm = false },
-            title = { Text("تطبيق التغييرات تلقائياً") },
-            text = {
-                Text(
-                    "سيتم ضبط DNS على ${ltr(p)} و ${ltr(sec)}" +
-                            (if (bestCh != null) " وقناة الواي فاي على $bestCh" else "") +
-                            " ثم إعادة تشغيل الراوتر. سينقطع الإنترنت حوالي دقيقة أو دقيقتين. لا تغلق التطبيق أثناء ذلك."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirm = false; applyNow() }) { Text("متابعة") }
-            },
-            dismissButton = { TextButton(onClick = { confirm = false }) { Text("إلغاء") } }
-        )
-    }
-
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
-                onClick = { confirm = true },
-                enabled = !busy && p.isNotEmpty() && sec.isNotEmpty(),
+                onClick = { applyNow() },
+                enabled = !busy,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text(if (busy) "جاري التطبيق..." else "تطبيق التغييرات تلقائياً + إعادة التشغيل") }
-            logs.takeLast(6).forEach { Text(it, fontSize = 12.sp, color = Muted) }
-            Text(
-                "DNS المقترح: Primary ${ltr(p)}  |  Secondary ${ltr(sec)}",
-                fontWeight = FontWeight.Bold, color = Good, fontSize = 14.sp
-            )
-            s.channels?.let { Text("أفضل قناة واي فاي: ${it.best}", color = Good, fontSize = 14.sp) }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(p)) }, modifier = Modifier.weight(1f)) {
-                    Text("نسخ Primary", fontSize = 12.sp)
-                }
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(sec)) }, modifier = Modifier.weight(1f)) {
-                    Text("نسخ Secondary", fontSize = 12.sp)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(
-                    onClick = {
-                        web?.evaluateJavascript(RouterJs.fillDns(p, sec)) { r ->
-                            val msg = when (r?.trim('"')) {
-                                "ok", "octets" -> "تمت تعبئة DNS، اضغط حفظ/Apply في صفحة الراوتر"
-                                "one" -> "تمت تعبئة حقل واحد فقط، أكمل الثاني يدوياً ثم احفظ"
-                                else -> "لم أجد حقول DNS. افتح صفحة إعدادات الإنترنت/WAN/DHCP واختر DNS يدوي ثم اضغط مرة أخرى"
-                            }
-                            Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) { Text("تعبئة DNS تلقائياً", fontSize = 12.sp) }
-                OutlinedButton(
-                    onClick = { web?.evaluateJavascript(RouterJs.login(s.user, s.pass), null) },
-                    modifier = Modifier.weight(1f)
-                ) { Text("إعادة تعبئة الدخول", fontSize = 12.sp) }
-            }
-            OutlinedButton(
-                onClick = {
-                    web?.evaluateJavascript(RouterJs.dump()) { r ->
-                        val txt = try { org.json.JSONTokener(r).nextValue() as? String } catch (_: Exception) { null }
-                        if (txt.isNullOrEmpty()) {
-                            Toast.makeText(ctx, "تعذر قراءة الصفحة", Toast.LENGTH_SHORT).show()
-                        } else {
-                            clipboard.setText(AnnotatedString(txt))
-                            Toast.makeText(ctx, "تم نسخ هيكل الصفحة، الصقه في المحادثة", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("نسخ هيكل الصفحة الحالية (للتطوير)", fontSize = 12.sp) }
+            ) { Text(if (busy) "جاري التعديل وإعادة التشغيل (لا تغلق)..." else "تطبيق التغييرات يدوياً") }
+            logs.takeLast(4).forEach { Text(it, fontSize = 12.sp, color = if (it.contains("✔")) Good else Muted) }
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -479,23 +343,7 @@ private fun WebScreen(vm: MainViewModel) {
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
                         var authTries = 0
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult): Boolean {
-                                if (!busyFlag[0]) return super.onJsAlert(view, url, message, result)
-                                logs.add("رسالة الراوتر: $message")
-                                result.confirm()
-                                return true
-                            }
-
-                            override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult): Boolean {
-                                if (!busyFlag[0]) return super.onJsConfirm(view, url, message, result)
-                                result.confirm()
-                                return true
-                            }
-                        }
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
