@@ -161,16 +161,18 @@ class AutoApply(
         return false
     }
 
-    /** يرجع true لو تم حفظ تغيير واحد على الأقل (وتمت إعادة تشغيل الراوتر وعاد الإنترنت). */
+    /**
+     * يضبط الـ DNS من قائمة DHCP > DHCP Settings (حقلا Primary DNS / Secondary DNS).
+     * بعض الموديلات تفتح صفحة الإعدادات مباشرة عند الضغط على DHCP، وبعضها تحتاج الضغط على DHCP Settings،
+     * لذلك الضغط على الاسم الفرعي اختياري، والمعيار هو العثور فعلاً على حقل Primary DNS.
+     */
     private suspend fun setDnsOnDhcp(): Boolean {
-        val nav = click(listOf("dhcp"), "left", tries = 4) && run {
-            delay(900)
-            click(listOf("dhcp settings"), "left", tries = 4)
-        }
-        if (!nav) {
-            log("ℹ لم أجد قسم DHCP")
+        if (!click(listOf("dhcp", "dhcp server"), "left", tries = 4)) {
+            log("ℹ لم أجد قائمة DHCP")
             return false
         }
+        delay(900)
+        click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
         delay(1500)
         val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 10) { it == "ok" }
         if (a != "ok") {
@@ -184,7 +186,8 @@ class AutoApply(
             return false
         }
         delay(3500)
-        click(listOf("dhcp settings"), "left", tries = 3)
+        // إعادة فتح الصفحة وقراءة القيمة للتأكد أنها اتحفظت
+        click(listOf("dhcp settings", "dhcp server settings"), "left", tries = 3)
         delay(1500)
         val v = until("NB.readIp(/^(primary|preferred) dns/i)", 6) { it.isNotEmpty() }
         if (v == dnsP) log("✔ تم حفظ DNS في DHCP وتأكيده: $dnsP")
@@ -213,6 +216,7 @@ class AutoApply(
         return true
     }
 
+    /** يرجع true لو تم حفظ تغيير واحد على الأقل (وتمت إعادة تشغيل الراوتر وعاد الإنترنت). */
     suspend fun execute(): Boolean {
         log("التحقق من تسجيل الدخول...")
         val inn = until("NB.find('logout','left')?'yes':'no'", 45, 800) { it == "yes" }
@@ -269,34 +273,17 @@ class AutoApply(
         }
 
         // ---------- DNS ----------
+        // الأولوية لصفحة DHCP (هي اللي فيها حقول DNS في هذا النوع من الراوترات)، ولو مش موجودة نجرب WAN
         log("ضبط DNS: $dnsP / $dnsS ...")
-        val navDns = click(listOf("network"), "left") && run {
-            delay(900)
-            click(listOf("wan"), "left")
-        }
-        if (!navDns) {
-            log("⚠ لم أجد صفحة WAN، تم تخطي DNS.")
+        if (setDnsOnDhcp()) {
+            dnsSaved = true
         } else {
-            delay(1500)
-            click(listOf("advanced"), "last", tries = 4)
-            delay(1500)
-            js("NB.checkManual()")
-            delay(600)
-            val a = until("NB.fillIp(/^(primary|preferred) dns/i,'$dnsP')", 10) { it == "ok" }
-            val b = if (a == "ok") until("NB.fillIp(/^(secondary|alternate) dns/i,'$dnsS')", 4) { it == "ok" } else ""
-            if (a == "ok") {
-                if (b != "ok") log("⚠ تم ملء الـ DNS الأساسي فقط")
-                if (click(listOf("save"), "last", tries = 6)) {
-                    delay(3000)
-                    // بعض الموديلات تحتاج حفظ مرة ثانية من صفحة WAN بعد نافذة الإعدادات المتقدمة
-                    if (click(listOf("save"), "last", tries = 2)) delay(3000)
-                    dnsSaved = true
-                    log("✔ تم حفظ DNS")
-                } else {
-                    log("⚠ لم أجد زر الحفظ، لم يتم تغيير الـ DNS.")
-                }
+            log("ℹ جاري المحاولة من صفحة WAN...")
+            if (setDnsOnWan()) {
+                dnsSaved = true
+                dnsOnWan = true
             } else {
-                log("⚠ لم أجد حقول DNS في الصفحة (لم يتم تغيير شيء). قد يحتاج هذا الموديل ضبطاً يدوياً.")
+                log("⚠ لم أجد حقول DNS لا في DHCP ولا في WAN (لم يتم تغيير شيء). قد يحتاج هذا الموديل ضبطاً يدوياً.")
             }
         }
 
